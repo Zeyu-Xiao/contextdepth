@@ -1,0 +1,45 @@
+# Local Python environments and caches
+.env
+.env.*
+!.env.example
+.envs/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Downloaded assets, external checkouts, and generated results
+/weights/
+/third_party/
+/tools/
+/data/
+/datasets/
+/checkpoints/
+/outpaintings/
+/outputs/
+/results/
+/logs/
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.npy
+*.npz
+
+# Machine-specific configuration and credentials
+models.local.yaml
+models.local.yml
+*.local.json
+*.local.yaml
+*.local.yml
+*.pem
+*.key
+.ssh/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

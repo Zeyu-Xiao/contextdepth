@@ -1,0 +1,44 @@
+diff --git a/unik3d/utils/__init__.py b/unik3d/utils/__init__.py
+index a6a7f76..49fe0d8 100644
+--- a/unik3d/utils/__init__.py
++++ b/unik3d/utils/__init__.py
+@@ -7,9 +7,16 @@ from .evaluation_depth import (DICT_METRICS, DICT_METRICS_3D, eval_3d,
+ from .geometric import spherical_zbuffer_to_euclidean, unproject_points
+ from .misc import (format_seconds, get_params, identity, recursive_index,
+                    remove_padding, to_cpu)
+-from .validation import validate
+ from .visualization import colorize, image_grid, log_train_artifacts
+ 
++
++def validate(*args, **kwargs):
++    # Keep optional training/logging dependencies off the inference import path.
++    from .validation import validate as validate_impl
++
++    return validate_impl(*args, **kwargs)
++
++
+ __all__ = [
+     "eval_depth",
+     "eval_3d",
+diff --git a/unik3d/utils/visualization.py b/unik3d/utils/visualization.py
+index 1a4ebea..c0e3da2 100644
+--- a/unik3d/utils/visualization.py
++++ b/unik3d/utils/visualization.py
+@@ -4,7 +4,6 @@ import matplotlib.pyplot as plt
+ import numpy as np
+ import torch
+ import torch.nn.functional as F
+-import wandb
+ from PIL import Image
+ 
+ from unik3d.utils.distributed import get_rank
+@@ -209,6 +208,9 @@ def train_artifacts(rgbs, gts, preds, infos={}):
+ def log_train_artifacts(rgbs, gts, preds, step, infos={}):
+     artifacts_grid = train_artifacts(rgbs, gts, preds, infos)
+     try:
++        # Inference visualization does not need the optional training logger.
++        import wandb
++
+         wandb.log({f"training": [wandb.Image(artifacts_grid)]}, step=step)
+     except:
+         Image.fromarray(artifacts_grid).save(
