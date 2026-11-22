@@ -56,42 +56,45 @@
   }
 
   /* ───────────────────────── Image wall ─────────────────────────
-   * Every tile is an evaluation query on which ContextDepth improves the frozen model.
-   * Rank 0 sits in the centre and later ranks spiral outwards. Scroll position drives it:
-   * query -> outpainted canvas -> depth (query only | ContextDepth | ground truth)
-   *       -> point clouds (query only | ContextDepth) -> dive into the interactive 3D stage. */
+   * Each tile is a test image on which ContextDepth improves the frozen model; the best ones
+   * sit in the centre. Scrolling walks through the method on all of them at once:
+   *   the query -> outpainted context -> depth (query only | ContextDepth | ground truth)
+   *             -> point clouds (query only | ContextDepth).
+   * A spotlight card in the middle shows one example large, with labels and its numbers, so
+   * every step can be read without guessing. Hovering a tile puts that image in the spotlight.
+   * Motion follows the scroll position through a short ease, so wheel steps do not jump. */
   function initWall() {
     const sec = $('#wall'), pin = $('#wall-pin'), cv = $('#wall-canvas');
     if (!sec || !cv) return;
     const ctx = cv.getContext('2d'), base = 'static/wall/';
-    const W = { meta: null, img: {}, p: 0, ph: -1, hover: -1, cells: null, rankAt: null, cols: 0, rows: 0, s: 0, th: 0, ox: 0, oy: 0, dpr: 1, born: 0,
-                pages: { rgb: new Map(), depth: new Map(), cloud: new Map() }, pending: false, mouse: null, over: null, cardKey: '' };
-    const cl = (x) => x < 0 ? 0 : x > 1 ? 1 : x, ss = (x, a, b) => { const t = cl((x - a) / (b - a)); return t * t * (3 - 2 * t); };
+    const W = { meta: null, p: 0, target: 0, ph: -1, hover: -1, pick: -1, cells: null, rankAt: null, cols: 0, rows: 0, s: 0, th: 0, ox: 0, oy: 0, dpr: 1,
+                born: 0, last: 0, raf: 0, tm: 0, max: 240, pages: { rgb: new Map(), depth: new Map(), cloud: new Map() }, mouse: null, cardKey: '', mode: '' };
+    const cl = (x) => x < 0 ? 0 : x > 1 ? 1 : x, ss = (x, k) => { const t = cl((x - k[0]) / (k[1] - k[0])); return t * t * (3 - 2 * t); };
     const lin = (x, k) => cl((x - k[0]) / (k[1] - k[0])), num = (v) => v.toLocaleString('en-US');
-    const cap = $('#wall-cap'), hero = $('#wall-hero'), veil = $('#wall-veil'), sweep = $('#wall-sweep'), rail = $('#wall-rail');
-    const card = $('#wall-card'), cardCv = $('#wall-card-canvas'), cardMeta = $('#wall-card-meta'), hint = $('#wall-scroll');
-    ['Queries', 'Outpaint', 'Depth · query only', 'Depth · ContextDepth', 'Depth · ground truth', 'Point clouds · query only', 'Point clouds · ContextDepth', 'Explore in 3D']
-      .forEach((n) => rail.appendChild(el('li', '', `<i></i><span>${n}</span>`)));
-    const CAPS = [
-      (mt) => `<b>${num(mt.n)} queries where ContextDepth beats the frozen model.</b> Each one is a keyhole view of its scene.` +
-              `<small>${num(mt.n)} of ${num(mt.total)} evaluation images: δ<sub>1</sub> gain ≥ ${Math.round(mt.min_gain * 100)} points and lower AbsRel · hover any tile</small>`,
-      () => '<b>Outpaint.</b> Generated surroundings give the model more to see. The query pixels are pasted back untouched.',
-      () => '<b>Query only.</b> Metric depth from the frozen model, cropped to the query. One colour scale per scene.',
-      () => '<b>ContextDepth.</b> Same pixels, same weights, richer context.',
-      () => '<b>Ground truth.</b> What every prediction is scored against.',
-      () => '<b>Point clouds, query only.</b> Each query lifted into 3D with the frozen model\'s depth. The dotted surfaces are ground truth: the points miss them.',
-      () => '<b>Point clouds, ContextDepth.</b> Same viewpoint, same pixels. The points land on the ground truth.',
-      () => '<b>Explore one in 3D.</b> Keep scrolling.'];
+    const hero = $('#wall-hero'), veil = $('#wall-veil'), sweep = $('#wall-sweep'), rail = $('#wall-rail'), hint = $('#wall-scroll'), skip = $('#wall-skip');
+    const card = $('#wall-card'), cardCv = $('#wall-card-canvas'), cardMeta = $('#wall-card-meta'), kicker = $('#wall-kicker'), title = $('#wall-title'), note = $('#wall-note');
+    const still = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const STEPS = ['The query', 'Outpaint', 'Depth', 'In 3D'];
+    STEPS.forEach((n) => rail.appendChild(el('li', '', `<i></i><span>${n}</span>`)));
+    const TEXT = {
+      query: ['A depth model sees only this crop.', (mt, n) => `Each tile is one of ${num(n)} test images, picked from the ${num(mt.n)} (of ${num(mt.total)}) where ContextDepth beats the frozen model.`],
+      canvas: ['First, outpaint what lies around it.', () => 'A generative model paints the surroundings. The original pixels, inside the dashed frame, stay untouched.'],
+      depth: ['Same model, same weights, more context.', () => 'Metric depth of the original crop: from the crop alone, with ContextDepth, and the ground truth. One colour scale per image.'],
+      cloud: ['In 3D, the points land where they should.', () => 'The crop lifted to 3D with each depth map. Dots mark the ground-truth surface.'] };
     // scroll keyframes, as fractions of the pinned scroll
-    const K = { zoomIn: [0.19, 0.26], zoomBack: [0.34, 0.40], sw1: [0.46, 0.55], sw2: [0.58, 0.67], toCloud: [0.70, 0.76], sw3: [0.80, 0.89], dive: [0.93, 1] };
+    const K = { out: [0.20, 0.30], depth: [0.40, 0.47], sw1: [0.50, 0.60], sw2: [0.63, 0.72], cloud: [0.75, 0.81], sw3: [0.84, 0.93], end: [0.965, 1] };
+    const modeAt = (p) => p < K.out[0] ? 'query' : p < K.depth[0] ? 'canvas' : p < K.cloud[0] ? 'depth' : 'cloud';
 
     function layout() {
       if (!W.meta) return;
-      const dpr = Math.min(window.devicePixelRatio || 1, 2), w = pin.clientWidth, h = pin.clientHeight, N = W.meta.n;
+      const w = pin.clientWidth, h = pin.clientHeight, M = W.meta.med;
       if (!w || !h) return;                    // not laid out yet (hidden tab); a later resize lays it out
+      const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+      W.max = Math.min(W.meta.n, M.per * Math.min(M.pages, 5));
       cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); W.hover = -1;
-      let s = Math.max(Math.sqrt(w * h / (0.75 * N)), 24), cols, rows;
-      for (;;) { cols = Math.ceil(w / s); rows = Math.ceil(h / (s * 0.75)); if (cols * rows <= N) break; s *= 1.01; }
+      // large enough to read, few enough to animate: about 13 tiles across, never more than W.max in view
+      let s = Math.max(88, Math.min(150, w / 13)), cols, rows;
+      for (;;) { cols = Math.ceil(w / s); rows = Math.ceil(h / (s * 0.75)); if (cols * rows <= W.max) break; s *= 1.02; }
       const list = [];
       for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
         const dx = (x + 0.5 - cols / 2) / (cols / 2), dy = (y + 0.5 - rows / 2) / (rows / 2);
@@ -100,185 +103,191 @@
       list.sort((a, b) => a.d - b.d);          // best tiles first: the centre fills before the edges
       const rankAt = new Int32Array(cols * rows);
       list.forEach((c, r) => { rankAt[c.y * cols + c.x] = r; c.d = Math.min(1, c.d / 1.42); });
-      Object.assign(W, { cells: list, rankAt, cols, rows, s, th: s * 0.75, ox: (w - cols * s) / 2, oy: (h - rows * s * 0.75) / 2, dpr });
+      Object.assign(W, { cells: list, rankAt, cols, rows, s, th: s * 0.75, ox: (w - cols * s) / 2, oy: (h - rows * s * 0.75) / 2, dpr, cardKey: '' });
+      for (let i = 0; i * M.per < list.length; i++) page('rgb', i);
     }
 
-    /* one tile in its current state, drawn into an arbitrary rectangle */
+    /* preview pages: 48 images each; rgb = the outpainted canvas, depth = 3 panels, cloud = 2 panels */
+    function page(kind, i) {
+      const store = W.pages[kind];
+      if (!store.has(i)) {
+        store.set(i, null);
+        CD.loadImage(`${base}med_${kind}_${String(i).padStart(2, '0')}.jpg`).then((im) => { store.set(i, im); W.cardKey = ''; schedule(); }).catch(() => store.delete(i));
+      }
+      return store.get(i);
+    }
+    const PANELS = { rgb: 1, depth: 3, cloud: 2 };
+    function src(kind, r, t) {                 // [image, sx, sy, sw, sh] of panel t of image r, or null while its page loads
+      const M = W.meta.med, P = M[kind], im = page(kind, Math.floor(r / M.per));
+      if (!im) return null;
+      const j = r % M.per;
+      return [im, ((j % P.cols) * PANELS[kind] + t) * P.w, Math.floor(j / P.cols) * P.h, P.w, P.h];
+    }
+
+    /* one tile in its current state */
     function tile(r, d, x, y, w, h, alpha, st) {
-      const mt = W.meta, R = mt.rgb, D = mt.depth, C = mt.cloud, I = W.img;
-      const k = cl(st.zoom * 1.5 - d * 0.5), f = 2 / 3 + k / 3;
-      const td = I.q ? cl(st.toDepth * 1.5 - d * 0.5) : 0, tc = I.pq && C ? cl(st.toCloud * 1.5 - d * 0.5) : 0;
-      const cut = (line) => cl((line - st.gx(x)) / st.gw(w));
-      const part = (im, T, from, to) => {      // a vertical slice [from, to] of sprite r from atlas im
-        if (to - from > 0.002) ctx.drawImage(im, (r % T.cols) * T.tw + 0.5 + (T.tw - 1) * from, Math.floor(r / T.cols) * T.th + 0.5, (T.tw - 1) * (to - from), T.th - 1, x + w * from, y, w * (to - from), h);
+      const k = cl(st.zoom * 1.5 - d * 0.5), f = 2 / 3 + k / 3, td = cl(st.toDepth * 1.5 - d * 0.5), tc = cl(st.toCloud * 1.5 - d * 0.5);
+      const cut = (line) => cl((line - x) / w);
+      const part = (kind, t, from, to) => {    // the vertical slice [from, to] of one panel
+        const q = to - from > 0.002 && src(kind, r, t);
+        if (q) ctx.drawImage(q[0], q[1] + q[3] * from, q[2], q[3] * (to - from), q[4], x + w * from, y, w * (to - from), h);
+        return !!q;
       };
+      const q = src('rgb', r, 0);
+      if (!q) { ctx.globalAlpha = alpha; ctx.fillStyle = '#eef0f5'; ctx.fillRect(x, y, w, h); return; }
       if (td < 1) {
-        const sx = (r % R.cols) * R.tw, sy = Math.floor(r / R.cols) * R.th;
         ctx.globalAlpha = alpha;
-        ctx.drawImage(I.rgb, sx + R.tw * (1 - f) / 2 + 0.5, sy + R.th * (1 - f) / 2 + 0.5, R.tw * f - 1, R.th * f - 1, x, y, w, h);
+        ctx.drawImage(q[0], q[1] + q[3] * (1 - f) / 2, q[2] + q[4] * (1 - f) / 2, q[3] * f, q[4] * f, x, y, w, h);
         if (k > 0.04) {                        // the query pixels inside the outpainted canvas
-          const q = (2 / 3) / f;
-          ctx.globalAlpha = alpha * k * (1 - td) * 0.72; ctx.lineWidth = Math.max(1, W.dpr * (w > 90 ? 1.6 : 1)); ctx.strokeStyle = '#fff';
-          ctx.strokeRect(x + w * (1 - q) / 2, y + h * (1 - q) / 2, w * q, h * q);
+          const e = (2 / 3) / f;
+          ctx.globalAlpha = alpha * k * (1 - td) * 0.85; ctx.lineWidth = Math.max(1, W.dpr * 1.5); ctx.strokeStyle = '#fff';
+          ctx.strokeRect(x + w * (1 - e) / 2, y + h * (1 - e) / 2, w * e, h * e);
         }
       }
       if (td > 0 && tc < 1) {                  // depth: left of a sweep line is the newer layer
-        const a2 = I.g && st.sw2 > 0 ? cut(st.x2) : 0, a1 = Math.max(a2, I.c && st.sw1 > 0 ? cut(st.x1) : 0);
+        const a2 = st.sw2 > 0 ? cut(st.x2) : 0, a1 = Math.max(a2, st.sw1 > 0 ? cut(st.x1) : 0);
         ctx.globalAlpha = alpha * td;
-        part(I.g, D, 0, a2); part(I.c, D, a2, a1); part(I.q, D, a1, 1);
+        part('depth', 2, 0, a2); part('depth', 1, a2, a1); part('depth', 0, a1, 1);
       }
       if (tc > 0) {                            // point clouds
-        const a3 = I.pc && st.sw3 > 0 ? cut(st.x3) : 0;
+        const a3 = st.sw3 > 0 ? cut(st.x3) : 0;
         ctx.globalAlpha = alpha * tc;
-        part(I.pc, C, 0, a3); part(I.pq, C, a3, 1);
+        part('cloud', 1, 0, a3); part('cloud', 0, a3, 1);
       }
     }
 
     function draw() {
-      if (!W.meta || !W.img.rgb || !W.cells || !W.cells.length) return;
+      if (!W.meta || !W.cells || !W.cells.length) return;
       const p = W.p, dpr = W.dpr, cw = cv.width, ch = cv.height;
-      const st = { zoom: ss(p, K.zoomIn[0], K.zoomIn[1]) - ss(p, K.zoomBack[0], K.zoomBack[1]), toDepth: ss(p, K.zoomBack[0], K.zoomBack[1]),
-                   toCloud: ss(p, K.toCloud[0], K.toCloud[1]), sw1: lin(p, K.sw1), sw2: lin(p, K.sw2), sw3: lin(p, K.sw3), gx: (x) => x, gw: (w) => w };
-      const dive = ss(p, K.dive[0], K.dive[1]), fade = 1 - ss(p, 0.975, 1);
+      const st = { zoom: ss(p, K.out) - ss(p, K.depth), toDepth: ss(p, K.depth), toCloud: ss(p, K.cloud), sw1: lin(p, K.sw1), sw2: lin(p, K.sw2), sw3: lin(p, K.sw3) };
+      st.x1 = st.sw1 * cw; st.x2 = st.sw2 * cw; st.x3 = st.sw3 * cw;
+      // fetch the next layers one step ahead of where the reader is
+      if (p > 0.05) for (let i = 0; i * W.meta.med.per < W.cells.length; i++) page('depth', i);
+      if (p > K.out[0]) for (let i = 0; i * W.meta.med.per < W.cells.length; i++) page('cloud', i);
       ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalAlpha = 1; ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, cw, ch);
-      ctx.imageSmoothingQuality = 'high';
-      const s = W.s * dpr, th = W.th * dpr, gap = Math.max(1, Math.round(dpr)), born = (performance.now() - W.born) / 1000, c0 = W.cells[0];
-      // the wall moves in on its centre for the point clouds, then dives into the middle tile
-      const fx = W.ox * dpr + (c0.x + 0.5) * s, fy = W.oy * dpr + (c0.y + 0.5) * th, S = (1 + 0.95 * st.toCloud) * (1 + Math.pow(dive, 3) * 46);
-      const inv = (X) => fx + (X - fx) / S;          // screen x -> wall x
-      st.x1 = inv(st.sw1 * cw); st.x2 = inv(st.sw2 * cw); st.x3 = inv(st.sw3 * cw);
-      Object.assign(W, { S, fx: fx / dpr, fy: fy / dpr });
-      if (S !== 1) { ctx.translate(fx, fy); ctx.scale(S, S); ctx.translate(-fx, -fy); }
-      const vx0 = inv(0) - s, vx1 = inv(cw), vy0 = fy + (0 - fy) / S - th, vy1 = fy + (ch - fy) / S;
+      ctx.imageSmoothingQuality = 'medium';
+      const s = W.s * dpr, th = W.th * dpr, gap = Math.max(2, Math.round(2 * dpr)), born = (performance.now() - W.born) / 1000, fade = 1 - ss(p, K.end);
       for (let r = 0; r < W.cells.length; r++) {
-        const c = W.cells[r], e = cl((born - c.d * 0.9) / 0.45);
+        const c = W.cells[r], e = cl((born - c.d * 0.7) / 0.4);
         if (e <= 0) continue;
-        const tx = Math.round(W.ox * dpr + c.x * s), ty = Math.round(W.oy * dpr + c.y * th);
-        if (tx < vx0 || tx > vx1 || ty < vy0 || ty > vy1) continue;          // off screen while zoomed in
-        tile(r, c.d, tx, ty, Math.round(s) - gap, Math.round(th) - gap, e * fade, st);
+        tile(r, c.d, Math.round(W.ox * dpr + c.x * s), Math.round(W.oy * dpr + c.y * th), Math.round(s) - gap, Math.round(th) - gap, e * fade, st);
       }
-      if (W.hover >= 0 && dive === 0) {        // lift the hovered tile
-        const c = W.cells[W.hover], x = W.ox * dpr + c.x * s, y = W.oy * dpr + c.y * th, g = s * 0.34, x0 = x - g, y0 = y - g * 0.75, w = s + 2 * g, h = th + 1.5 * g;
-        ctx.globalAlpha = 1; ctx.save();
-        ctx.shadowColor = 'rgba(18,18,40,.5)'; ctx.shadowBlur = 22 * dpr; ctx.shadowOffsetY = 6 * dpr; ctx.fillStyle = '#fff';
-        ctx.fillRect(x0 - 2 * dpr, y0 - 2 * dpr, w + 4 * dpr, h + 4 * dpr); ctx.restore();
-        st.gx = () => x; st.gw = () => s;       // keep the sweep cut where it is on the tile itself
-        tile(W.hover, c.d, x0, y0, w, h, 1, st);
+      const sel = current();
+      if (card.classList.contains('on') && sel < W.cells.length) {             // mark the tile shown in the spotlight
+        const c = W.cells[sel], x = Math.round(W.ox * dpr + c.x * s), y = Math.round(W.oy * dpr + c.y * th);
+        ctx.globalAlpha = fade; ctx.lineWidth = 3 * dpr; ctx.strokeStyle = '#5b47e0';
+        ctx.strokeRect(x - dpr, y - dpr, Math.round(s) - gap + 2 * dpr, Math.round(th) - gap + 2 * dpr);
       }
       ctx.globalAlpha = 1;
     }
+
+    /* the scroll position is followed through a short exponential ease */
+    function frame(now) {
+      W.raf = 0;
+      const dt = W.last ? Math.min(64, now - W.last) : 16; W.last = now;
+      const gap = W.target - W.p;
+      W.p = still || Math.abs(gap) < 0.0004 ? W.target : W.p + gap * (1 - Math.exp(-dt / 110));
+      chrome(); showCard(); draw();
+      if (W.p !== W.target || now - W.born < 1600) schedule(); else W.last = 0;
+    }
     function schedule() {
-      if (W.pending) return;
-      W.pending = true;
-      const run = () => { if (!W.pending) return; W.pending = false; draw(); if (performance.now() - W.born < 2600) schedule(); };
-      requestAnimationFrame(run); setTimeout(run, 90);
+      if (W.raf) return;
+      W.raf = requestAnimationFrame((t) => { clearTimeout(W.tm); frame(t); });
+      W.tm = setTimeout(() => { cancelAnimationFrame(W.raf); frame(performance.now()); }, 160);    // a hidden tab pauses rAF
     }
 
     /* text and controls that sit on top of the wall */
     function chrome() {
-      const p = W.p, h0 = 1 - ss(p, 0.012, 0.07);
+      const p = W.p, h0 = 1 - ss(p, [0.02, 0.10]);
       hero.style.opacity = h0; hero.style.transform = `translateY(${-(1 - h0) * 46}px)`; hero.style.pointerEvents = h0 < 0.4 ? 'none' : '';
-      veil.style.opacity = 1 - ss(p, 0.015, 0.085);
-      hint.style.opacity = 1 - ss(p, 0, 0.03);
-      const ph = p < K.zoomIn[0] ? 0 : p < K.zoomBack[0] ? 1 : p < K.sw1[0] ? 2 : p < K.sw2[0] ? 3 : p < K.toCloud[0] ? 4 : p < K.sw3[0] ? 5 : p < K.dive[0] ? 6 : 7;
-      const on = p > 0.065 && p < 0.99;
-      cap.style.opacity = rail.style.opacity = on ? 1 : 0;
-      if (W.meta && W.ph !== ph) { W.ph = ph; cap.innerHTML = CAPS[ph](W.meta); $$('li', rail).forEach((li, i) => li.classList.toggle('on', i === ph)); }
-      const s = [lin(p, K.sw1), lin(p, K.sw2), lin(p, K.sw3)], act = s.findIndex(v => v > 0 && v < 1);
+      veil.style.opacity = 1 - ss(p, [0.03, 0.12]);
+      hint.style.opacity = 1 - ss(p, [0, 0.04]);
+      const on = p > 0.085 && p < 0.985;
+      card.classList.toggle('on', on); rail.style.opacity = on ? 1 : 0;
+      skip.classList.toggle('on', p > 0.02 && p < 0.95);
+      const ph = STEPS.length - 1 - [K.cloud[0], K.depth[0], K.out[0], -1].findIndex((v) => p >= v);
+      if (W.ph !== ph) { W.ph = ph; $$('li', rail).forEach((li, i) => li.classList.toggle('on', i === ph)); }
+      const s = [lin(p, K.sw1), lin(p, K.sw2), lin(p, K.sw3)], act = s.findIndex((v) => v > 0 && v < 1);
       sweep.style.opacity = act >= 0 ? 1 : 0;
       if (act >= 0) {
-        sweep.style.left = s[act] * 100 + '%'; sweep.classList.toggle('s2', act === 1);
+        sweep.style.transform = `translateX(${s[act] * pin.clientWidth}px)`; sweep.classList.toggle('s2', act === 1);
         $('.sw-l', sweep).textContent = act === 1 ? 'Ground truth' : 'ContextDepth'; $('.sw-r', sweep).textContent = act === 1 ? 'ContextDepth' : 'Query only';
       }
     }
     function onScroll() {
       const r = sec.getBoundingClientRect(), span = sec.offsetHeight - pin.clientHeight;
-      const p = cl(-r.top / span);
-      if (p === W.p && W.ph >= 0) return;
-      W.p = p; chrome(); hoverAt(); schedule();
+      W.target = cl(-r.top / span);
+      if (W.ph < 0) { W.p = W.target; }        // first call: start where the page is, without easing in
+      schedule();
     }
 
-    /* hover: an enlarged view of whatever the tile currently shows */
-    function page(kind, i) {
-      const store = W.pages[kind];
-      if (!store.has(i)) {
-        store.set(i, null);
-        CD.loadImage(`${base}med_${kind}_${String(i).padStart(2, '0')}.jpg`).then((im) => { store.set(i, im); W.cardKey = ''; showCard(); }).catch(() => store.delete(i));
-      }
-      return store.get(i);
-    }
+    /* the spotlight: one image, large, in whatever state the wall is in */
+    const current = () => W.hover >= 0 ? W.hover : W.pick >= 0 && W.pick < (W.cells ? W.cells.length : 0) ? W.pick : 0;
     function showCard() {
-      const r = W.hover, mt = W.meta;
-      if (r < 0 || !mt || !W.mouse) { card.hidden = true; W.cardKey = ''; return; }
-      const mode = W.p < K.zoomIn[0] ? 'query' : W.p < K.zoomBack[0] ? 'canvas' : W.p < K.toCloud[0] ? 'depth' : 'cloud', key = r + mode, it = mt.items[r], M = mt.med;
-      if (key !== W.cardKey) {
-        W.cardKey = key;
-        const pi = Math.floor(r / M.per), j = r % M.per, x = cardCv.getContext('2d');
-        card.classList.toggle('depth', mode === 'depth'); card.classList.toggle('cloud', mode === 'cloud');
-        const strip = (kind, T, P, lows, n) => {       // n panels side by side: hover-preview page if loaded, wall sprite meanwhile
-          const g = 8, w = P.w, h = P.h, im = page(kind, pi);
-          cardCv.width = w * n + g * (n - 1); cardCv.height = h;
-          x.fillStyle = '#fff'; x.fillRect(0, 0, cardCv.width, h);
-          for (let t = 0; t < n; t++) {
-            if (im) x.drawImage(im, ((j % P.cols) * n + t) * w, Math.floor(j / P.cols) * h, w, h, t * (w + g), 0, w, h);
-            else if (W.img[lows[t]]) x.drawImage(W.img[lows[t]], (r % T.cols) * T.tw + 0.5, Math.floor(r / T.cols) * T.th + 0.5, T.tw - 1, T.th - 1, t * (w + g), 0, w, h);
-          }
-        };
-        if (mode === 'depth') strip('depth', mt.depth, M.depth, ['q', 'c', 'g'], 3);
-        else if (mode === 'cloud') strip('cloud', mt.cloud, M.cloud, ['pq', 'pc'], 2);
-        else {
-          const w = M.rgb.w, h = M.rgb.h, im = page('rgb', pi), R = mt.rgb, f = mode === 'query' ? 2 / 3 : 1;
-          cardCv.width = w; cardCv.height = h;
-          if (im) x.drawImage(im, (j % M.rgb.cols) * w + w * (1 - f) / 2, Math.floor(j / M.rgb.cols) * h + h * (1 - f) / 2, w * f, h * f, 0, 0, w, h);
-          else x.drawImage(W.img.rgb, (r % R.cols) * R.tw + R.tw * (1 - f) / 2, Math.floor(r / R.cols) * R.th + R.th * (1 - f) / 2, R.tw * f, R.th * f, 0, 0, w, h);
-          if (mode === 'canvas') {
-            x.setLineDash([9, 7]); x.lineWidth = 4; x.strokeStyle = 'rgba(18,18,40,.5)'; x.strokeRect(w / 6, h / 6, w * 2 / 3, h * 2 / 3);
-            x.lineWidth = 2.5; x.strokeStyle = '#fff'; x.strokeRect(w / 6, h / 6, w * 2 / 3, h * 2 / 3); x.setLineDash([]);
-          }
-        }
-        const head = mode === 'depth' ? '<div class="tri"><span>query only</span><span>ContextDepth</span><span>ground truth</span></div>'
-          : mode === 'cloud' ? '<div class="tri two"><span>query only</span><span>ContextDepth</span></div>'
-          : mode === 'canvas' ? '<div class="tri one"><span>outpainted context · dashed: query pixels</span></div>' : '';
-        cardMeta.innerHTML = head + `<b>${mt.datasets[it[0]]}</b> · δ<sub>1</sub> ${(it[1] / 10).toFixed(1)}% → <span class="up">${(it[2] / 10).toFixed(1)}%</span>` +
-          `<br>median depth ${m(it[3])} → ${m(it[4])} m · ground truth ${m(it[5])} m` + (mode === 'cloud' ? '<br>dots: ground truth' : '');
+      const mt = W.meta;
+      if (!mt || !W.cells) return;
+      const p = W.p, mode = modeAt(p), r = current(), M = mt.med, it = mt.items[r];
+      const lit = mode === 'depth' ? 1 + (lin(p, K.sw1) > 0.5) + (lin(p, K.sw2) > 0.5) : mode === 'cloud' ? 1 + (lin(p, K.sw3) > 0.5) : 1;
+      if (mode !== W.mode) {
+        W.mode = mode;
+        card.className = card.className.replace(/\bm-\w+/g, '').trim() + ' m-' + mode;
+        kicker.textContent = `Step ${['query', 'canvas', 'depth', 'cloud'].indexOf(mode) + 1} of 4 · ${STEPS[['query', 'canvas', 'depth', 'cloud'].indexOf(mode)]}`;
+        title.textContent = TEXT[mode][0]; note.textContent = TEXT[mode][1](mt, W.cells.length);
       }
-      card.hidden = false;
-      const b = pin.getBoundingClientRect(), cwid = card.offsetWidth, chei = card.offsetHeight, mx = W.mouse[0] - b.left, my = W.mouse[1] - b.top;
-      card.style.left = Math.max(8, mx + 22 + cwid > b.width ? mx - 22 - cwid : mx + 22) + 'px';
-      card.style.top = Math.max(64, Math.min(b.height - chei - 8, my + 22 + chei > b.height ? my - 22 - chei : my + 22)) + 'px';
+      const kind = mode === 'depth' ? 'depth' : mode === 'cloud' ? 'cloud' : 'rgb', ready = !!src(kind, r, 0), key = [r, mode, lit, ready].join();
+      if (key === W.cardKey) return;
+      W.cardKey = key;
+      const x = cardCv.getContext('2d'), n = PANELS[kind], P = M[kind], g = n > 1 ? 10 : 0;
+      cardCv.width = P.w * n + g * (n - 1); cardCv.height = P.h;
+      x.fillStyle = '#fff'; x.fillRect(0, 0, cardCv.width, cardCv.height);
+      for (let t = 0; t < n; t++) {
+        const q = src(kind, r, t), dx = t * (P.w + g);
+        x.globalAlpha = 1; x.fillStyle = '#eef0f5'; x.fillRect(dx, 0, P.w, P.h);
+        if (!q) continue;
+        x.globalAlpha = t < lit ? 1 : 0.16;      // panels light up as the sweep on the wall reaches them
+        if (kind === 'rgb') {
+          const f = mode === 'query' ? 2 / 3 : 1;
+          x.drawImage(q[0], q[1] + q[3] * (1 - f) / 2, q[2] + q[4] * (1 - f) / 2, q[3] * f, q[4] * f, 0, 0, P.w, P.h);
+          if (mode === 'canvas') {
+            x.setLineDash([9, 7]); x.lineWidth = 4; x.strokeStyle = 'rgba(18,18,40,.5)'; x.strokeRect(P.w / 6, P.h / 6, P.w * 2 / 3, P.h * 2 / 3);
+            x.lineWidth = 2.5; x.strokeStyle = '#fff'; x.strokeRect(P.w / 6, P.h / 6, P.w * 2 / 3, P.h * 2 / 3); x.setLineDash([]);
+          }
+        } else x.drawImage(q[0], q[1], q[2], q[3], q[4], dx, 0, P.w, P.h);
+      }
+      x.globalAlpha = 1;
+      const tag = (names) => `<div class="tri n${names.length}">${names.map((s, i) => `<span class="${i < lit ? 'on' : ''}">${s}</span>`).join('')}</div>`;
+      const d1 = `δ<sub>1</sub> ${(it[1] / 10).toFixed(1)}% → <span class="up">${(it[2] / 10).toFixed(1)}%</span>`;
+      cardMeta.innerHTML = (mode === 'depth' ? tag(['Query only', 'ContextDepth', 'Ground truth']) : mode === 'cloud' ? tag(['Query only', 'ContextDepth']) : '') +
+        `<p><b>${mt.datasets[it[0]]}</b> · ${mode === 'query' || mode === 'canvas' ? 'accuracy ' : ''}${d1}` +
+        (mode === 'depth' || mode === 'cloud' ? ` · median depth ${m(it[3])} → ${m(it[4])} m (truth ${m(it[5])} m)` : ' with ContextDepth') + '</p>';
     }
     function hoverAt() {
       let r = -1;
-      if (W.mouse && W.cells && W.cells.length && W.p < K.dive[0] && !(W.over && W.over.closest && W.over.closest('.wall-hero a, .wall-hero .btn'))) {
-        const b = pin.getBoundingClientRect(), x = W.mouse[0] - b.left, y = W.mouse[1] - b.top, S = W.S || 1;
-        const wx = S === 1 ? x : W.fx + (x - W.fx) / S, wy = S === 1 ? y : W.fy + (y - W.fy) / S;
-        const cx = Math.floor((wx - W.ox) / W.s), cy = Math.floor((wy - W.oy) / W.th);
-        const hb = W.p < 0.04 && hero.getBoundingClientRect();
-        const veiled = W.p < 0.04 && (Math.hypot((x / b.width - 0.5) / 0.6, (y / b.height - 0.27) / 0.44) < 0.72 ||      // under the title glow
-          (W.mouse[0] > hb.left - 24 && W.mouse[0] < hb.right + 24 && W.mouse[1] > hb.top - 24 && W.mouse[1] < hb.bottom + 24));   // or the title block (narrow screens)
-        if (!veiled && cx >= 0 && cy >= 0 && cx < W.cols && cy < W.rows) r = W.rankAt[cy * W.cols + cx];
+      if (W.mouse && W.cells && W.cells.length && card.classList.contains('on')) {
+        const b = pin.getBoundingClientRect(), x = W.mouse[0] - b.left, y = W.mouse[1] - b.top, cb = card.getBoundingClientRect();
+        const cx = Math.floor((x - W.ox) / W.s), cy = Math.floor((y - W.oy) / W.th);
+        const inCard = W.mouse[0] > cb.left && W.mouse[0] < cb.right && W.mouse[1] > cb.top && W.mouse[1] < cb.bottom;
+        if (inCard) r = W.hover;                 // keep the current image while the pointer is over the card
+        else if (cx >= 0 && cy >= 0 && cx < W.cols && cy < W.rows) r = W.rankAt[cy * W.cols + cx];
       }
-      if (r !== W.hover) { W.hover = r; schedule(); }
-      showCard();
+      return r;
     }
-    pin.addEventListener('pointermove', (e) => { if (e.pointerType !== 'mouse') return; W.touch = false; W.mouse = [e.clientX, e.clientY]; W.over = e.target; hoverAt(); });
-    pin.addEventListener('pointerdown', (e) => { W.touch = e.pointerType !== 'mouse'; W.mouse = [e.clientX, e.clientY]; W.over = e.target; hoverAt(); });
-    pin.addEventListener('pointerleave', (e) => { if (e.pointerType !== 'mouse') return; W.mouse = null; hoverAt(); });
-    // A tap shows one tile; on touch screens the card goes away as soon as the page scrolls.
-    window.addEventListener('scroll', () => { if (W.touch && W.mouse) { W.mouse = null; hoverAt(); } }, { passive: true });
+    pin.addEventListener('pointermove', (e) => { if (e.pointerType !== 'mouse') return; W.mouse = [e.clientX, e.clientY]; const r = hoverAt(); if (r !== W.hover) { W.hover = r; schedule(); } });
+    pin.addEventListener('pointerleave', (e) => { if (e.pointerType !== 'mouse') return; W.mouse = null; if (W.hover !== -1) { W.hover = -1; schedule(); } });
+    pin.addEventListener('pointerdown', (e) => {   // touch: a tap picks the image and it stays picked
+      if (e.pointerType === 'mouse' || e.target.closest('a, button')) return;
+      W.mouse = [e.clientX, e.clientY]; const r = hoverAt(); W.mouse = null;
+      if (r >= 0) { W.pick = r; schedule(); }
+    });
+    skip.addEventListener('click', () => window.scrollTo({ top: sec.offsetTop + sec.offsetHeight - 64, behavior: still ? 'auto' : 'smooth' }));
     window.addEventListener('scroll', onScroll, { passive: true });
-    const relay = () => { layout(); W.ph = -1; onScroll(); schedule(); };
+    const relay = () => { layout(); W.ph = -1; W.mode = ''; onScroll(); };
     window.addEventListener('resize', relay);
     if ('ResizeObserver' in window) new ResizeObserver(relay).observe(pin);
 
     Promise.resolve(window.CD_WALL).then((mt) => {
       if (!mt) throw new Error('static/wall/wall.js is missing');
-      W.meta = mt; layout(); onScroll();
-      return CD.loadImage(base + 'wall_rgb.jpg');
-    }).then((im) => {
-      W.img.rgb = im; W.born = performance.now(); schedule();
-      [['q', 'depth_query'], ['c', 'depth_context'], ['g', 'depth_gt'], ['pq', 'cloud_query'], ['pc', 'cloud_context']]
-        .forEach(([k, n]) => CD.loadImage(`${base}wall_${n}.jpg`).then((d) => { W.img[k] = d; schedule(); }).catch(() => {}));
+      W.meta = mt; W.born = performance.now(); layout(); onScroll();
     }).catch(console.error);
   }
 

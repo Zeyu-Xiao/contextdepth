@@ -21,7 +21,7 @@
 <link rel="apple-touch-icon" href="static/images/apple-touch-icon.png">
 <!-- Fonts are served from static/fonts: the page makes no request to any other host. -->
 <link rel="stylesheet" href="static/css/fonts.css?v=28e9a4ce">
-<link rel="stylesheet" href="static/css/style.css?v=b9f60dcc">
+<link rel="stylesheet" href="static/css/style.css?v=fe85aa7d">
 </head>
 <body>
 <noscript><p style="margin:0;padding:12px 16px;background:#fff6e5;color:#5a4300;font:14px/1.5 system-ui,sans-serif;text-align:center">The interactive figures on this page need JavaScript. The video, method and tables are still readable below.</p></noscript>
@@ -47,7 +47,7 @@
 <main id="top">
 
 <!-- ───────────────────────────── Wall (hero) ───────────────────────────── -->
-<!-- Scroll-driven: queries -> outpainted context -> query-only depth -> ContextDepth -> ground truth -> 3D -->
+<!-- Scroll-driven, four steps: the query -> outpainted context -> depth (query only, ContextDepth, ground truth) -> point clouds -->
 <section class="wall" id="wall" aria-label="Wall of evaluation queries on which ContextDepth improves the frozen model">
   <div class="wall-pin" id="wall-pin">
     <canvas id="wall-canvas"></canvas>
@@ -73,14 +73,18 @@
       </div>
     </div>
 
-    <p class="wall-cap glass" id="wall-cap" aria-live="polite"></p>
-    <ol class="wall-rail glass" id="wall-rail" aria-hidden="true"></ol>
+    <ol class="wall-rail" id="wall-rail" aria-hidden="true"></ol>
     <div class="wall-sweep" id="wall-sweep" aria-hidden="true"><span class="sw-l"></span><span class="sw-r"></span></div>
-    <div class="wall-card glass" id="wall-card" hidden>
+    <!-- Spotlight: one image shown large in the state the wall is in, with the step spelled out. -->
+    <div class="wall-card" id="wall-card" aria-live="polite">
+      <p class="wc-kicker" id="wall-kicker"></p>
+      <p class="wc-title" id="wall-title"></p>
       <canvas id="wall-card-canvas"></canvas>
       <div class="wall-card-meta" id="wall-card-meta"></div>
+      <p class="wc-note" id="wall-note"></p>
     </div>
     <div class="wall-scroll" id="wall-scroll" aria-hidden="true"><span>Scroll</span><i></i></div>
+    <button class="wall-skip" id="wall-skip" type="button">Skip intro<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg></button>
   </div>
 </section>
 
@@ -569,6 +573,6 @@
 <script src="static/wall/wall.js?v=8f9fa0c8"></script>
 <script src="static/js/depth.js?v=be268150"></script>
 <script src="static/js/cloud.js?v=b09923f0"></script>
-<script src="static/js/app.js?v=e311879e"></script>
+<script src="static/js/app.js?v=341904c0"></script>
 </body>
 </html>
