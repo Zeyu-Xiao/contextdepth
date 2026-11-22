@@ -120,7 +120,7 @@ outpainting:
     offload: model
 ```
 
-This uses more system memory and more time per image. It does not change the sampling.
+This uses more system memory and more time per image. It does not change the sampling. In our single-image test it lowered the peak from 35 GB to 24.4 GB, so a 24 GB card is at the limit; we have not run on one.
 
 ### Expected results
 

@@ -68,7 +68,7 @@ Then confirm that inference works on one image:
 python run.py infer --image path/to/image.png --output outputs/example
 ```
 
-OneReward with every component on the GPU peaks at about 35 GB of GPU memory. On a smaller GPU add `--offload model`. Setup is done when this command writes `outputs/example/result.json`. Details, optional models and the reference bank: [docs/installation.md](../../docs/installation.md).
+OneReward with every component on the GPU peaks at about 35 GB of GPU memory. On a smaller GPU add `--offload model`, which peaked at 24.4 GB in the authors' test; a 24 GB card is at the limit and was not tested, so report an out-of-memory error as it is instead of changing precision. Setup is done when this command writes `outputs/example/result.json`. Details, optional models and the reference bank: [docs/installation.md](../../docs/installation.md).
 
 ## 2. Run on images
 

@@ -193,16 +193,18 @@ fall back to the default configuration of the respective entry point.
 
 What has been run, so that you know what to trust:
 
-- The dependency sets in `requirements.txt` and `requirements-extra-depth.txt`
-  resolve with pip on Python 3.12 with the CUDA 12.8 wheels, and
-  `check_installation.py` passes in such an environment.
+- `check_installation.py` and the unit tests pass on Python 3.12 with the
+  package versions of `requirements.txt` (PyTorch 2.7.0, CUDA 12.8 build).
+  Creating the environment from scratch with the commands above has not been
+  re-run since Depth Pro 2 and its `av` dependency were added.
 - In an environment with these versions, every built-in depth model was run on
   GPU through `python -m evaluation`, on images from all six benchmarks, and
   compared with the predictions of the paper's runs. See
   [reproduction.md](reproduction.md) for the protocol.
 - OneReward generation was run in the same environment through both entry
-  points: `run.py infer` on single images and `python -m evaluation` on the
-  quick subset.
+  points, from a clean copy of the repository on an RTX 4090 with 48 GB:
+  `run.py infer` on a single image (peak 35 GB of GPU memory, 24.4 GB with
+  `--offload model`) and `python -m evaluation` on the quick subset.
 
 Depth Pro 2 imports its video utilities at load time, so it needs the `av`
 package, which `requirements-extra-depth.txt` installs.
