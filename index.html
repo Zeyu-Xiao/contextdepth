@@ -1,0 +1,574 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ContextDepth: Boosting Metric Depth Estimation via Richer Context</title>
+<meta name="description" content="ContextDepth is a training-free spatial in-context learning framework: it outpaints the surroundings of an image and uses a retrieved reference to select the best metric depth prediction from a frozen depth model.">
+<meta name="theme-color" content="#ffffff">
+<link rel="canonical" href="https://zeyu-xiao.github.io/contextdepth/">
+<meta property="og:url" content="https://zeyu-xiao.github.io/contextdepth/">
+<meta name="robots" content="noindex, nofollow">
+<meta property="og:title" content="ContextDepth: Boosting Metric Depth Estimation via Richer Context">
+<meta property="og:description" content="First outpaint, then select. A training-free way to improve frozen metric depth models with richer visual context.">
+<meta property="og:type" content="website">
+<meta property="og:image" content="https://zeyu-xiao.github.io/contextdepth/static/images/social.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:image" content="https://zeyu-xiao.github.io/contextdepth/static/images/social.jpg">
+<link rel="icon" href="static/images/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="static/images/apple-touch-icon.png">
+<!-- Fonts are served from static/fonts: the page makes no request to any other host. -->
+<link rel="stylesheet" href="static/css/fonts.css?v=28e9a4ce">
+<link rel="stylesheet" href="static/css/style.css?v=b9f60dcc">
+</head>
+<body>
+<noscript><p style="margin:0;padding:12px 16px;background:#fff6e5;color:#5a4300;font:14px/1.5 system-ui,sans-serif;text-align:center">The interactive figures on this page need JavaScript. The video, method and tables are still readable below.</p></noscript>
+
+<header class="nav" id="nav">
+  <div class="nav-inner">
+    <a class="brand" href="#top" aria-label="ContextDepth, back to top">
+      <span class="brand-mark" aria-hidden="true"><i></i></span>
+      <span>Context<b>Depth</b></span>
+    </a>
+    <nav class="nav-links" aria-label="Sections">
+      <a href="#demo">Demo</a>
+      <a href="#video">Video</a>
+      <a href="#method">Method</a>
+      <a href="#results">Results</a>
+      <a href="#probe">Probe</a>
+      <a href="#skill">Skill</a>
+      <a href="#bibtex">BibTeX</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+<!-- ───────────────────────────── Wall (hero) ───────────────────────────── -->
+<!-- Scroll-driven: queries -> outpainted context -> query-only depth -> ContextDepth -> ground truth -> 3D -->
+<section class="wall" id="wall" aria-label="Wall of evaluation queries on which ContextDepth improves the frozen model">
+  <div class="wall-pin" id="wall-pin">
+    <canvas id="wall-canvas"></canvas>
+    <div class="wall-veil" id="wall-veil"></div>
+
+    <div class="wall-hero" id="wall-hero">
+      <p class="eyebrow-pill"><span class="dot"></span>Preprint</p>
+      <h1 class="title">Context<span class="grad">Depth</span></h1>
+      <p class="subtitle">Boosting Metric Depth Estimation via Richer Context</p>
+
+      <!-- Authors, paper and code links are filled in by tools/build_dist.ps1 from tools/deploy.json. -->
+      <p class="authors">Anonymous authors</p>
+
+      <div class="actions">
+        <span class="btn btn-soon" title="The paper will be linked here"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3h7l5 5v13H7z"/><path d="M14 3v5h5M10 13h6M10 17h6"/></svg>Paper <small>soon</small></span>
+        <a class="btn" href="#video">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M10 8.5v7l6-3.5z"/></svg>Video
+        </a>
+        <a class="btn" href="https://github.com/Zeyu-Xiao/contextdepth" target="_blank" rel="noopener"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 8l-4 4 4 4M15 8l4 4-4 4"/></svg>Code</a>
+        <a class="btn" href="#bibtex">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 17c2-1 3-3 3-6V7H5v5h3M15 17c2-1 3-3 3-6V7h-4v5h3"/></svg>BibTeX
+        </a>
+      </div>
+    </div>
+
+    <p class="wall-cap glass" id="wall-cap" aria-live="polite"></p>
+    <ol class="wall-rail glass" id="wall-rail" aria-hidden="true"></ol>
+    <div class="wall-sweep" id="wall-sweep" aria-hidden="true"><span class="sw-l"></span><span class="sw-r"></span></div>
+    <div class="wall-card glass" id="wall-card" hidden>
+      <canvas id="wall-card-canvas"></canvas>
+      <div class="wall-card-meta" id="wall-card-meta"></div>
+    </div>
+    <div class="wall-scroll" id="wall-scroll" aria-hidden="true"><span>Scroll</span><i></i></div>
+  </div>
+</section>
+
+<!-- ───────────────────────────── Demo stage ───────────────────────────── -->
+<section class="stage-sec">
+  <!-- Demo stage: one scene, played end to end in 3D -->
+  <div class="wrap wrap-stage" id="demo">
+    <div class="stage" id="stage" data-mode="3d">
+      <canvas id="st-cloud" aria-label="3D point cloud of the query, un-projected with the predicted depth"></canvas>
+      <svg class="st-leaders" id="st-leaders" aria-hidden="true"></svg>
+      <div class="st-labels" id="st-labels" aria-hidden="true"></div>
+
+      <div class="st-2d" id="st-2d" hidden>
+        <div class="cmp" id="cmp">
+          <canvas id="cmp-a"></canvas>
+          <canvas id="cmp-b"></canvas>
+          <span class="tag tag-l">Query only</span>
+          <span class="tag tag-r">ContextDepth</span>
+          <div class="cmp-handle" id="cmp-handle"><i></i></div>
+          <div class="probe" id="probe" hidden></div>
+        </div>
+      </div>
+
+      <p class="st-caption" id="st-caption" aria-live="polite"></p>
+
+      <div class="st-top">
+        <div class="seg seg-sm glass" id="st-model" role="tablist" aria-label="Depth model">
+          <button data-v="da3" aria-selected="true">Depth Anything 3</button>
+          <button data-v="moge2" aria-selected="false">MoGe-2</button>
+          <button data-v="moge3" aria-selected="false">MoGe-3</button>
+        </div>
+      </div>
+
+      <aside class="st-hud" id="st-hud">
+        <div class="glass st-pip">
+          <div class="hud-h"><span>Model input</span><em id="st-pip-tag"></em></div>
+          <div class="st-pip-view" id="st-pip-view">
+            <div class="st-pip-zoom" id="st-pip-zoom"></div>
+            <div class="roi" id="st-pip-roi"></div>
+          </div>
+        </div>
+        <div class="glass st-read">
+          <div class="hud-h"><span>Median depth</span><em id="st-state"></em></div>
+          <div class="st-med"><b id="st-med">–</b><span id="st-gt"></span></div>
+          <div class="st-gauge" id="st-gauge"><i class="g-gt"></i><i class="g-pred"></i></div>
+          <div class="st-kpis">
+            <div><span>δ<sub>1</sub> accuracy</span><b id="st-d1">–</b></div>
+            <div><span>AbsRel</span><b id="st-ar">–</b></div>
+          </div>
+          <div class="hud-h hud-h2"><span>Candidates</span><em id="st-bias"></em></div>
+          <div class="st-cands" id="st-cands"></div>
+        </div>
+      </aside>
+
+      <div class="st-bottom">
+        <div class="seg seg-sm glass" id="st-view" role="tablist" aria-label="View">
+          <button data-v="3d" aria-selected="true">3D</button>
+          <button data-v="depth" aria-selected="false">Depth</button>
+          <button data-v="error" aria-selected="false">Error</button>
+        </div>
+        <div class="st-timeline glass" id="st-timeline">
+          <button type="button" class="st-play" id="st-play" aria-label="Pause"><svg viewBox="0 0 24 24" aria-hidden="true"><path class="i-pause" d="M8 6v12M16 6v12"/><path class="i-play" d="M8 5.5v13l11-6.5z"/></svg></button>
+          <div class="st-track" id="st-track" role="slider" aria-label="Demo timeline" tabindex="0"></div>
+        </div>
+        <div class="st-legend glass" id="st-legend" hidden></div>
+        <span class="st-hint glass" id="st-hint">drag to orbit</span>
+      </div>
+    </div>
+
+    <div class="st-strip" id="st-strip" role="tablist" aria-label="Scenes"></div>
+    <p class="fine st-note">
+      Real stored predictions from the paper's evaluation (cropped queries, without GT camera, mixed reference bank), in metres.
+      Points are un-projected with the ground-truth intrinsics; dark dots are ground truth. Twelve scenes from NYUv2, KITTI, ETH3D, HAMMER, iBims-1 and DIODE.
+    </p>
+  </div>
+</section>
+
+<!-- ───────────────────────────── Key numbers ───────────────────────────── -->
+<section class="numbers">
+  <div class="wrap wrap-wide">
+    <div class="num-grid" data-reveal>
+      <div class="num">
+        <b><span class="count" data-to="22.65" data-dec="2" data-prefix="+">+22.65</span></b>
+        <span>δ<sub>1</sub> points on Depth Anything 3<br>cropped queries, no camera intrinsics</span>
+      </div>
+      <div class="num">
+        <b>6 <i>×</i> 6</b>
+        <span>depth models × benchmarks<br>3,406 evaluation images</span>
+      </div>
+      <div class="num">
+        <b>12 <i>/</i> 12</b>
+        <span>cropped-image settings improved<br>11 / 12 on full images</span>
+      </div>
+      <div class="num">
+        <b>0</b>
+        <span>weights updated, query pixels edited,<br>or depths rescaled</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────────── Video ───────────────────────────── -->
+<section id="video" class="section">
+  <div class="wrap">
+    <p class="kicker">Overview video</p>
+    <h2>The paper in two minutes</h2>
+  </div>
+  <div class="wrap wrap-wide">
+    <div class="video-shell card" data-reveal>
+      <video id="demo-video" controls playsinline preload="metadata" poster="static/videos/poster.jpg">
+        <source src="static/videos/contextdepth_overview.mp4" type="video/mp4">
+        Your browser does not support HTML5 video.
+      </video>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────────── Abstract ───────────────────────────── -->
+<section id="abstract" class="section">
+  <div class="wrap">
+    <p class="kicker">Abstract</p>
+    <h2>Can context improve <em>how well</em> a frozen model does its task?</h2>
+    <div class="prose" data-reveal>
+      <p>
+        Monocular metric depth estimation is inherently ill-posed: a single image provides only a keyhole view of the scene,
+        causing models to misestimate absolute scale despite recovering sharp relative geometry. While in-context learning (ICL)
+        steers models through inputs alone, existing visual ICL frameworks focus on instructing generalist models on
+        <em>which</em> task to perform. We ask a different question: can context improve <em>how well</em> a fixed specialist
+        model executes its task?
+      </p>
+      <p>
+        We therefore propose <strong>ContextDepth</strong>, a training-free spatial ICL framework that improves pretrained metric
+        depth estimators without updating model weights or modifying raw query pixels. <strong>First outpaint, then select.</strong>
+        ContextDepth surrounds the query with diverse outpainted contexts to produce candidate depth predictions. We retrieve
+        similar scenes from a reference bank of images with ground-truth depth, including in-domain examples. The model's tendency
+        to overestimate or underestimate depth on these references then guides candidate selection, yielding the final depth prediction.
+      </p>
+      <p>
+        We evaluate six mainstream depth models on six benchmarks, with and without camera intrinsics. On cropped images,
+        ContextDepth improves δ<sub>1</sub> by up to 22.65 percentage points on Depth Anything 3. On full images, additional
+        context remains useful, but gains are smaller and less consistent across models. To further examine this observation,
+        we vary the amount of real context with and without camera intrinsics to study diminishing returns. We find that not all
+        models use additional context effectively, and their sensitivity to input field of view (FOV) varies. ContextDepth thus
+        offers a training-free approach to improving metric depth estimation through spatial context expansion and reference
+        guidance, while probing models' FOV sensitivity and efficiency in using additional context. We will release all code and
+        provide ContextDepth as a plug-and-play skill.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────────── Method ───────────────────────────── -->
+<section id="method" class="section section-tint">
+  <div class="wrap">
+    <p class="kicker">Method</p>
+    <h2>First outpaint, then select</h2>
+    <p class="section-lede">
+      ContextDepth treats the <em>input</em>, not the weights, as the lever. It never rescales a prediction:
+      the output is always one of the frozen model's own depth maps.
+    </p>
+  </div>
+  <div class="wrap wrap-wide">
+    <div class="steps">
+      <article class="step card" data-reveal>
+        <header><span class="step-n">1</span><h3>Outpaint the surroundings</h3></header>
+        <div class="step-viz" id="viz-outpaint"></div>
+        <p>
+          An outpainting model (OneReward) extends the scene beyond the image borders. The original pixels are pasted back,
+          so only the generated surroundings act as context. Different seeds give <em>N</em>&nbsp;=&nbsp;3 candidate contexts.
+        </p>
+      </article>
+      <article class="step card" data-reveal>
+        <header><span class="step-n">2</span><h3>Predict, then crop back</h3></header>
+        <div class="step-viz" id="viz-predict"></div>
+        <p>
+          The same frozen depth model runs on every expanded image and each prediction is cropped back to the query region.
+          Identical pixels now come with several scale hypotheses.
+        </p>
+      </article>
+      <article class="step card" data-reveal>
+        <header><span class="step-n">3</span><h3>Select with a reference</h3></header>
+        <div class="step-viz" id="viz-select"></div>
+        <p>
+          A similar scene with known depth is retrieved (SigLIP2). The sign of the model's error on it, the
+          <button type="button" class="term" data-pop="pop-bias">directional bias</button>, tells which candidates move the scale the right way.
+        </p>
+        <p class="term-row"><span aria-hidden="true">ƒ</span> selection rule
+          <button type="button" class="term" data-pop="pop-unknown">without intrinsics</button>
+          <button type="button" class="term" data-pop="pop-known">with intrinsics</button>
+        </p>
+      </article>
+    </div>
+
+    <!-- Formal rules, shown on demand (hover or click a dotted term) -->
+    <template id="pop-bias">
+      <h4>Directional bias</h4>
+      <p class="math">
+        <i>e<sub>y</sub></i> = median<sub><i>p</i> ∈ Ω<sub><i>y</i></sub></sub> log
+        <span class="frac"><span><i class="hat">d</i><sub><i>y</i></sub>(<i>p</i>)</span><span><i>d</i><sub><i>y</i></sub>(<i>p</i>)</span></span>
+      </p>
+      <p>The model predicts the reference <i>y</i> and is compared with its ground truth.
+        <i>e<sub>y</sub></i>&nbsp;&gt;&nbsp;0: it overestimates depth in scenes like this; <i>e<sub>y</sub></i>&nbsp;&lt;&nbsp;0: it underestimates.</p>
+    </template>
+    <template id="pop-unknown">
+      <h4>Selection without query intrinsics</h4>
+      <p class="math">
+        ℰ = { <i>i</i> : <i>e<sub>y</sub></i> · Δ<sub><i>i</i></sub> &lt; 0 },&nbsp;
+        <i>i</i><sup>⋆</sup> = arg min<sub><i>i</i> ∈ ℰ</sub> δ(<i class="hat">k</i><sub><i>i</i></sub>, <i>k</i><sub><i>y</i></sub>)
+      </p>
+      <p>The anchor is the candidate whose estimated camera is closest to the reference's. Candidates that shift depth
+        against the bias are eligible; the one with the closest camera wins. If none qualifies, the anchor is kept.</p>
+    </template>
+    <template id="pop-known">
+      <h4>Selection with query intrinsics</h4>
+      <p class="math">
+        <i>i</i><sup>⋆</sup> = arg max<sub><i>i</i> ∈ ℰ</sub> |Δ<sub><i>i</i></sub>|,&nbsp;
+        Δ<sub><i>i</i></sub> = median<sub><i>p</i></sub> log
+        <span class="frac"><span><i class="hat">d</i><sub><i>i</i></sub>(<i>p</i>)</span><span><i class="hat">d</i><sub><i>x</i></sub>(<i>p</i>)</span></span>
+      </p>
+      <p>The query-only prediction is the baseline. Among candidates that correct the bias, the largest change is selected;
+        otherwise the query-only prediction is returned.</p>
+    </template>
+
+    <figure class="paper-fig" data-reveal>
+      <div class="paper-fig-frame card">
+        <img src="static/images/overview.webp" alt="Overview of ContextDepth: spatial context construction, reference signal, and reference-guided selection" loading="lazy" width="3142" height="1246">
+      </div>
+      <figcaption>
+        <strong>Overview of ContextDepth.</strong>
+        (a) Multiple outpainted contexts are generated while preserving the original ROI pixels; the same frozen depth model runs
+        on each expanded image and predictions are cropped back to the ROI.
+        (b) A reference image similar to the input is retrieved, and the model's prediction is compared with its ground-truth depth
+        to obtain a directional bias.
+        (c) The selector uses this bias to choose the final ROI depth.
+      </figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- ───────────────────────────── Results ───────────────────────────── -->
+<section id="results" class="section section-tint">
+  <div class="wrap">
+    <p class="kicker">Quantitative results</p>
+    <h2>Consistent gains across six frozen models</h2>
+    <p class="section-lede">
+      δ<sub>1</sub> accuracy on 3,406 images from six benchmarks, with no test-time scale or shift alignment.
+      Outpainting alone helps most models; reference-guided selection adds gains on top in every setting.
+    </p>
+  </div>
+  <div class="wrap wrap-wide">
+    <div class="chart card" data-reveal>
+      <div class="chart-head">
+        <div class="seg" id="ch-input"><button data-v="crop" aria-selected="true">Cropped queries</button><button data-v="full" aria-selected="false">Full images</button></div>
+        <div class="seg" id="ch-cam"><button data-v="unknown" aria-selected="true">Without GT camera</button><button data-v="known" aria-selected="false">With GT camera</button></div>
+        <div class="chart-key">
+          <span><i class="k k-q"></i>Query only</span>
+          <span><i class="k k-o"></i>Outpaint</span>
+          <span><i class="k k-s"></i>Outpaint + Select</span>
+        </div>
+      </div>
+      <div class="chart-body" id="chart"></div>
+      <p class="chart-note" id="chart-note"></p>
+    </div>
+
+    <div class="table-card card" data-reveal>
+      <div class="table-head">
+        <h3>Table 1 · Generated context on cropped and full-image queries</h3>
+        <p>δ<sub>1</sub> ↑ (%), 3,406 images. Outpaint uses seed 0; Outpaint + Select uses the mixed bank (<i>N</i> = 3). Shading shows the change from Query only. † Depth Pro is analysed in the probe below.</p>
+      </div>
+      <div class="table-scroll"><table class="tbl" id="tbl-main"></table></div>
+    </div>
+
+    <div class="table-card card" data-reveal>
+      <div class="table-head">
+        <h3>Table 2 · Which references help?</h3>
+        <p>δ<sub>1</sub> ↑ (%) on the 2,635 non-DIODE queries. Q: Query only; O: Outpaint (seed 0); M / C / D: Select with the mixed, cross-dataset and fixed-DIODE reference banks. The mixed bank, which includes in-domain examples, beats a single outpainting in all 24 settings.</p>
+      </div>
+      <div class="table-scroll"><table class="tbl tbl-dense" id="tbl-banks"></table></div>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────────── Probe ───────────────────────────── -->
+<section id="probe" class="section">
+  <div class="wrap">
+    <p class="kicker">Probe</p>
+    <h2>One protocol, two probes</h2>
+    <p class="section-lede">Real context is restored ring by ring, with no generation and no selection. What does each frozen model do with the wider view?</p>
+  </div>
+  <div class="wrap wrap-wide">
+    <div class="pb card" id="pb" data-reveal>
+
+      <!-- How the probe works, shown rather than told -->
+      <div class="pb-how">
+        <div class="pb-stage" id="pb-stage">
+          <img src="static/images/probe_scene.jpg" alt="" loading="lazy" width="768" height="576">
+          <svg viewBox="0 0 400 300" preserveAspectRatio="none" aria-hidden="true">
+            <path id="pb-veil" fill-rule="evenodd" fill="rgba(247,247,251,.9)"/>
+            <path id="pb-ring" fill-rule="evenodd" fill="rgba(91,71,224,.44)"/>
+            <rect id="pb-out" fill="none" stroke="#5b47e0" stroke-width="2" vector-effect="non-scaling-stroke"/>
+            <rect id="pb-in-u" fill="none" stroke="rgba(18,18,40,.55)" stroke-width="4" vector-effect="non-scaling-stroke"/>
+            <rect id="pb-in" fill="none" stroke="#fff" stroke-width="2" stroke-dasharray="7 5" vector-effect="non-scaling-stroke"/>
+          </svg>
+          <span class="pb-tag pb-tag-out" id="pb-tag-out"></span>
+          <span class="pb-tag pb-tag-in" id="pb-tag-in"></span>
+        </div>
+
+        <div class="pb-eq" aria-hidden="true">
+          <div class="pb-op"><div class="pb-thumb wide" id="pb-wide"><i></i></div><span id="pb-wide-l"></span></div>
+          <b>−</b>
+          <div class="pb-op"><div class="pb-thumb narrow" id="pb-narrow"></div><span id="pb-narrow-l"></span></div>
+          <b>=</b>
+          <div class="pb-res"><i></i><span>Δδ<sub>1</sub></span></div>
+        </div>
+
+        <div class="pb-key" aria-hidden="true">
+          <span><i class="k-ring"></i>added real context</span>
+          <span><i class="k-score"></i>scored pixels</span>
+          <span><i class="k-veil"></i>not shown</span>
+        </div>
+
+        <div class="seg seg-sm pb-steps" id="pb-steps" role="tablist" aria-label="Expansion step">
+          <button data-v="0" aria-selected="true">Q<sub>0</sub>→Q<sub>1</sub></button>
+          <button data-v="1" aria-selected="false">Q<sub>1</sub>→Q<sub>2</sub></button>
+          <button data-v="2" aria-selected="false">Q<sub>2</sub>→Q<sub>3</sub></button>
+          <button data-v="3" aria-selected="false">Q<sub>3</sub>→Q<sub>4</sub></button>
+        </div>
+        <p class="sr-only">
+          Nested inputs Q0 to Q4 span 66.7%, 75%, 83.3%, 91.7% and 100% of each image dimension. For each adjacent pair, the frozen model
+          is run on the narrower and on the wider input, both predictions are scored on the pixels of the narrower input, and the difference
+          in δ1 is the marginal gain of the added real context. Results are averaged over 3,406 images.
+        </p>
+      </div>
+
+      <!-- The two readouts -->
+      <div class="pb-probes">
+        <article class="pb-probe">
+          <header>
+            <span class="pb-n">1</span>
+            <div>
+              <h3>Context utilization</h3>
+              <p><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3v10H4z"/><path d="M9 13l2.2 2.2L15.5 11"/></svg>GT camera given: gains come from the new content alone</p>
+            </div>
+          </header>
+          <div class="pb-chart" id="pb-c1"></div>
+          <div class="pb-read" id="pb-r1"></div>
+          <p class="pb-take">MoGe and DA3 keep gaining from every ring. UniDepth V2 and UniK3D saturate sooner. Depth Pro barely responds.</p>
+        </article>
+        <article class="pb-probe">
+          <header>
+            <span class="pb-n">2</span>
+            <div>
+              <h3>FOV sensitivity</h3>
+              <p><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h3l1.5-2h7L17 8h3v10H4z"/><path d="M10.3 11.3a1.9 1.9 0 1 1 2.6 1.8c-.6.3-.9.7-.9 1.3M12 16.6v.1"/></svg>camera estimated: the model must also absorb the FOV change</p>
+            </div>
+          </header>
+          <div class="pb-chart" id="pb-c2"></div>
+          <div class="pb-read" id="pb-r2"></div>
+          <p class="pb-take">MoGe and DA3 stay positive. UniDepth V2 stalls at −0.01. Depth Pro turns negative: the wider view hurts.</p>
+        </article>
+      </div>
+    </div>
+    <p class="fine pb-note">Marginal δ<sub>1</sub> gain (points) per step, averaged over 3,406 images from six benchmarks. Hover a step or a model; in probe 2 the dashed line shows the same model with the GT camera.</p>
+  </div>
+</section>
+
+<!-- ───────────────────────────── Limitations ───────────────────────────── -->
+<section id="limits" class="section section-tint">
+  <div class="wrap">
+    <p class="kicker">Limitations &amp; outlook</p>
+    <h2>What ContextDepth does not solve yet</h2>
+    <div class="limits" data-reveal>
+      <div>
+        <h4>Limitations</h4>
+        <p>Outpainting may add misleading scale cues, and FOV changes can reduce accuracy for sensitive models.
+          Context extent and reference choice need validation for each model. Adaptive expansion and more reliable
+          context selection remain future work.</p>
+      </div>
+      <div>
+        <h4>Outlook</h4>
+        <p>Better generative models could provide more useful surroundings, and stronger video models could extend outpainting
+          to earlier or later moments, expanding context in time as well as space. Reference objects of known dimensions could
+          anchor scale, and training with expanded contexts could improve FOV robustness.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ───────────────────────────── Agent skill ───────────────────────────── -->
+<section id="skill" class="section">
+  <div class="wrap wrap-wide">
+    <p class="kicker">Agent skill</p>
+    <h2>Hand it to your coding agent</h2>
+    <p class="section-lede">The repository ships one skill. Give an agent the prompt and it clones the code, builds the environment and runs ContextDepth. Ask for a test and it reproduces the crop block of Table 1. Tell it how your own model is called and it plugs that model in.</p>
+
+    <div class="skill" data-reveal>
+      <div class="skill-prompt card">
+        <div class="seg skill-tabs" role="tablist" aria-label="What to ask the agent">
+          <button type="button" role="tab" aria-selected="true" data-skill="setup">Set up</button>
+          <button type="button" role="tab" aria-selected="false" data-skill="test">Test</button>
+          <button type="button" role="tab" aria-selected="false" data-skill="depth">My depth model</button>
+          <button type="button" role="tab" aria-selected="false" data-skill="outpaint">My outpainting model</button>
+        </div>
+        <div class="skill-box">
+          <button class="copy" id="copy-skill" type="button">Copy</button>
+          <pre id="skill-text" tabindex="0"></pre>
+        </div>
+        <p class="skill-note" id="skill-note"></p>
+        <p class="skill-links">
+          <a href="https://github.com/Zeyu-Xiao/contextdepth/blob/main/skills/contextdepth/SKILL.md" target="_blank" rel="noopener">Read the skill</a>
+          <a href="https://github.com/Zeyu-Xiao/contextdepth" target="_blank" rel="noopener">Repository</a>
+          <span>Claude Code: <code>cp -r skills/contextdepth ~/.claude/skills/</code></span>
+        </p>
+      </div>
+
+      <ol class="skill-steps">
+        <li>
+          <b>Set up</b>
+          <span>Clones the repository, creates a Python 3.12 environment, fetches the pinned model sources and the default weights (MoGe-2, OneReward), then checks one image end to end.</span>
+        </li>
+        <li>
+          <b>Run</b>
+          <span>Outpaints your image three times and returns metric depth for the image and for every candidate. With a reference bank it also returns the selected prediction.</span>
+        </li>
+        <li>
+          <b>Test, when you ask</b>
+          <span>A quick check on six images, or the full crop block of Table 1: seven depth models, with and without the ground-truth camera, 3,406 images. The cropping code and the OneReward generation code are included; the run generates the outpainted images.</span>
+        </li>
+        <li>
+          <b>Your own models</b>
+          <span>Describe how your outpainting model or your metric depth model is called. The agent writes one adapter file and verifies it. The same adapter runs in the test.</span>
+        </li>
+      </ol>
+    </div>
+  </div>
+  <script type="application/json" id="skill-prompts">
+  {
+    "setup": {
+      "prompt": "Read https://raw.githubusercontent.com/Zeyu-Xiao/contextdepth/main/skills/contextdepth/SKILL.md and follow it to set up ContextDepth on this machine. Ask me before any large download.",
+      "note": "Needs Linux, an NVIDIA GPU and Python 3.12. FLUX.1-Fill-dev is a gated model: you accept its terms and log in to Hugging Face yourself."
+    },
+    "test": {
+      "prompt": "Read https://raw.githubusercontent.com/Zeyu-Xiao/contextdepth/main/skills/contextdepth/SKILL.md and set up ContextDepth. Then run the quick check from its test section and show me the report. Ask me before starting the full Table 1 run.",
+      "note": "Quick check: one 41 MB download and 18 generated images. Full run: 2.9 GB of evaluation data, eight depth checkpoints and 10,218 generated images."
+    },
+    "depth": {
+      "prompt": "Read https://raw.githubusercontent.com/Zeyu-Xiao/contextdepth/main/skills/contextdepth/SKILL.md and integrate my metric depth model into ContextDepth.\nCode: [repository or local path]\nWeights: [path]\nHow it is called: [the inference call, and whether it accepts camera intrinsics]\nRun ContextDepth with it on one image and tell me which checks you ran.",
+      "note": "The model must predict metric depth. A camera estimate is only needed for selection when intrinsics are unknown."
+    },
+    "outpaint": {
+      "prompt": "Read https://raw.githubusercontent.com/Zeyu-Xiao/contextdepth/main/skills/contextdepth/SKILL.md and integrate my outpainting model into ContextDepth.\nCode: [repository or local path]\nWeights: [path]\nHow it is called: [how it takes the image, the mask and the seed]\nGenerate three candidates for one image with it and tell me which checks you ran.",
+      "note": "The adapter receives the image, its place on the canvas and one seed per candidate. The original pixels are pasted back unchanged."
+    }
+  }
+  </script>
+</section>
+
+<!-- ───────────────────────────── BibTeX ───────────────────────────── -->
+<section id="bibtex" class="section">
+  <div class="wrap">
+    <p class="kicker">Citation</p>
+    <h2>BibTeX</h2>
+    <div class="bib card">
+      <button class="copy" id="copy-bib" type="button">Copy</button>
+<pre id="bib-text">@misc{contextdepth,
+  title  = {ContextDepth: Boosting Metric Depth Estimation via Richer Context},
+  author = {Anonymous},
+  note   = {Preprint},
+  year   = {2026}
+}</pre>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="footer">
+  <div class="wrap">
+    <p>ContextDepth</p>
+    <p class="fine">Evaluation data follows the MoGe-2 preprocessing of NYUv2, KITTI, ETH3D, HAMMER, iBims-1 and DIODE. Outpainting uses FLUX.1-Fill-dev with OneReward weights.</p>
+  </div>
+</footer>
+
+<script src="static/js/data.js?v=46cc88ed"></script>
+<script src="static/data/scenes.js?v=7a3493b1"></script>
+<script src="static/wall/wall.js?v=8f9fa0c8"></script>
+<script src="static/js/depth.js?v=be268150"></script>
+<script src="static/js/cloud.js?v=b09923f0"></script>
+<script src="static/js/app.js?v=e311879e"></script>
+</body>
+</html>
