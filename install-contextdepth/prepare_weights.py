@@ -24,9 +24,28 @@ DEPTH_ASSETS = (
     ("depth-anything/DA3METRIC-LARGE", None, "model.safetensors", "DA3METRIC-LARGE", "bbea5b0b3ee389849cffa7ddae89de064a90abd2b055fc5aa99aac68db324776"),
     ("lpiccinelli/unik3d-vitl", "008aa54308b8bc142f74c9c7b098833aaede06bd", "model.safetensors", "unik3d-vitl", "890be79699dd68abb3c9a3aab24b528bf09d97eca4dd073e3e83c0a2028566b2"),
     ("lpiccinelli/unidepth-v2-vitl14", "52b349b514bd8b47642f67ac78cb7b5dc5c51dd9", "pytorch_model.bin", "unidepth-v2-vitl14", "101d4a941854e7f7ec6839a5a39bfe35bd5cc59ed65d8c5994a55607d8481541"),
+    # Depth Pro 2 (H+) keeps its focal-length estimator in a separate checkpoint.
+    ("apple/DepthPro2-H", "68426c789f75a7c760273e857222625b4fe69576", "model.safetensors", "depth_pro2/DepthPro2-H", "cfc532336019abd2128b04be2c2967175522e46de69222ef72b87c6675ee3b17"),
+    ("apple/DepthPro2-focal", "622659d44a2002cf9ae4333f2569afa938290d9a", "model.safetensors", "depth_pro2/DepthPro2-focal", "8f567d1c97ff916137288668f6bd306ce2094da2e2b852b0e4539dbb139c8c86"),
 )
 DEPTH_PRO_URL = "https://ml-site.cdn-apple.com/models/depth-pro/depth_pro.pt"
 DEPTH_PRO_SHA256 = "3eb35ca68168ad3d14cb150f8947a4edf85589941661fdb2686259c80685c0ce"
+DEPTH_MODEL_DIRECTORIES = {
+    "moge2": "moge-2-vitl-normal",
+    "moge3": "moge-3-vitg",
+    "da3": "DA3NESTED-GIANT-LARGE-1.1",
+    "da3_metric": "DA3METRIC-LARGE",
+    "unik3d": "unik3d-vitl",
+    "unidepth": "unidepth-v2-vitl14",
+    "depth_pro": "depth_pro.pt",
+    "depth_pro2": ("depth_pro2/DepthPro2-H", "depth_pro2/DepthPro2-focal"),
+}
+
+
+def _directories(names=None):
+    """Weight folders (or the Depth Pro file) of the chosen models; all models by default."""
+    values = DEPTH_MODEL_DIRECTORIES.values() if not names else (DEPTH_MODEL_DIRECTORIES[name] for name in names)
+    return {directory for value in values for directory in (value if isinstance(value, tuple) else (value,))}
 DEPTH_CONFIG_SHA256 = {
     "DA3NESTED-GIANT-LARGE-1.1": "09adf89474017e717bc05aa86fd3a378708ba8914b036d61874eced328069468",
     "DA3METRIC-LARGE": "a336f3e76fe375aaae17a9aed9130c9f2aa061535d317ec57dcb2f1f02e1dd53",
@@ -69,12 +88,15 @@ def staging_directory(output):
     return output, temporary
 
 
-def download_depth(root, *, check_only=False):
+def download_depth(root, *, check_only=False, models=None):
+    selected = _directories(models)
     if not check_only:
         from huggingface_hub import snapshot_download
         root.mkdir(parents=True, exist_ok=True)
     verified = []
     for repo, revision, filename, directory, expected in DEPTH_ASSETS:
+        if directory not in selected:
+            continue
         destination = root / directory
         target = destination / filename
         if target.exists():
@@ -89,18 +111,20 @@ def download_depth(root, *, check_only=False):
         if directory in DEPTH_CONFIG_SHA256:
             item["config_sha256"] = require_hash(destination / "config.json", DEPTH_CONFIG_SHA256[directory])
         verified.append(item)
-    target = root / "depth_pro.pt"
-    if not target.exists() and not check_only:
-        with tempfile.NamedTemporaryFile(prefix="depth_pro.", suffix=".download", dir=root, delete=False) as stream:
-            temporary = Path(stream.name)
-        urllib.request.urlretrieve(DEPTH_PRO_URL, temporary)
-        require_hash(temporary, DEPTH_PRO_SHA256)
-        temporary.rename(target)
-    observed = require_hash(target, DEPTH_PRO_SHA256)
-    verified.append({"url": DEPTH_PRO_URL, "file": "depth_pro.pt", "sha256": observed})
+    if "depth_pro.pt" in selected:
+        target = root / "depth_pro.pt"
+        if not target.exists() and not check_only:
+            with tempfile.NamedTemporaryFile(prefix="depth_pro.", suffix=".download", dir=root, delete=False) as stream:
+                temporary = Path(stream.name)
+            urllib.request.urlretrieve(DEPTH_PRO_URL, temporary)
+            require_hash(temporary, DEPTH_PRO_SHA256)
+            temporary.rename(target)
+        observed = require_hash(target, DEPTH_PRO_SHA256)
+        verified.append({"url": DEPTH_PRO_URL, "file": "depth_pro.pt", "sha256": observed})
     report = {"status": "verified", "assets": verified}
     if not check_only:
-        write_json(root / "depth_weights_verified.json", report)
+        suffix = "_" + "_".join(sorted(set(models))) if models else ""
+        write_json(root / f"depth_weights_verified{suffix}.json", report)
     print(json.dumps(report, indent=2))
 
 
@@ -216,9 +240,11 @@ def check_flux_base(source):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    depth = commands.add_parser("depth", help="Download and hash-check the seven checkpoints used by six models")
+    depth = commands.add_parser("depth", help="Download and hash-check the checkpoints of the built-in depth models")
     depth.add_argument("--weights-root", type=Path, default=ROOT / "weights")
     depth.add_argument("--check-only", action="store_true", help="Read local weights without downloading or modifying files")
+    depth.add_argument("--model", action="append", choices=tuple(DEPTH_MODEL_DIRECTORIES),
+                       help="Download/check only this model (repeatable); default: every built-in depth model")
     siglip = commands.add_parser("siglip2", help="Export a downloaded SigLIP2 vision tower on CPU")
     siglip.add_argument("--source", type=Path, required=True)
     siglip.add_argument("--output", type=Path, default=ROOT / "weights/siglip2-so400m-patch16-384-vision")
@@ -229,7 +255,7 @@ def main():
     flux.add_argument("--source", type=Path, default=ROOT / "weights/FLUX.1-Fill-dev")
     args = parser.parse_args()
     if args.command == "depth":
-        download_depth(args.weights_root.expanduser().resolve(), check_only=args.check_only)
+        download_depth(args.weights_root.expanduser().resolve(), check_only=args.check_only, models=args.model)
     elif args.command == "siglip2":
         export_siglip2(args.source.expanduser().resolve(), args.output)
     elif args.command == "flux-base":

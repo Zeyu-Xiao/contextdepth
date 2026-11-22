@@ -1,0 +1,24 @@
+{
+  "title": "Table 1, crop block",
+  "metric": "delta1 in percent, mean over images, no scale alignment",
+  "images": 3406,
+  "methods": {"direct": "Query-only", "seed0": "Outpaint", "selector": "Outpaint + Select"},
+  "note": "Paper values. The outpainted images are regenerated on your machine, so Outpaint and Outpaint + Select are not expected to match to the last digit; Query-only does not depend on generation.",
+  "rows": [
+    {"model": "MoGe-3", "unknown": "moge3_unknown", "known": "moge3_known",
+     "paper": {"unknown": [62.67, 76.73, 78.99], "known": [78.36, 78.84, 81.21]}},
+    {"model": "DA3", "unknown": "da3nested", "known": "da3metric_gt_focal",
+     "paper": {"unknown": [51.17, 68.47, 73.82], "known": [73.99, 79.64, 81.05]}},
+    {"model": "MoGe-2", "unknown": "moge2", "known": "moge2_gt_fov",
+     "paper": {"unknown": [60.32, 77.06, 78.28], "known": [80.39, 82.02, 82.83]}},
+    {"model": "UniDepth V2", "unknown": "unidepth_v2_vitl14", "known": "unidepth_gt_k",
+     "paper": {"unknown": [62.06, 69.91, 72.04], "known": [73.01, 72.85, 75.56]}},
+    {"model": "UniK3D", "unknown": "unik3d_unknown", "known": "unik3d_known",
+     "paper": {"unknown": [62.80, 74.68, 76.37], "known": [76.26, 76.74, 78.62]}},
+    {"model": "Depth Pro", "unknown": "depth_pro", "known": "depth_pro_gt_focal",
+     "paper": {"unknown": [55.62, 57.40, 60.00], "known": [68.12, 67.75, 70.56]}},
+    {"model": "Depth Pro 2", "unknown": "depth_pro2", "known": "depth_pro2_gt_focal",
+     "paper": {"unknown": [62.80, 71.49, 76.21], "known": [84.08, 85.59, 86.54]},
+     "note": "Not in the paper's table; values from the authors' run with the same protocol."}
+  ]
+}

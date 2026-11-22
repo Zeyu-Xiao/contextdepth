@@ -1,0 +1,27 @@
+# Normal use: one Linux / Python 3.12 environment for OneReward + MoGe2.
+# Install the matching CUDA PyTorch wheels first; see docs/installation.md.
+# These are inference dependencies, not the upstream training/demo environments.
+torch==2.7.0
+torchvision==0.22.0
+numpy==1.26.4
+scipy==1.17.1
+Pillow==12.1.1
+opencv-python==4.11.0.86
+PyYAML==6.0.3
+diffusers==0.35.1
+transformers==4.52.3
+tokenizers==0.21.1
+huggingface-hub==0.36.2
+accelerate==1.13.0
+safetensors==0.7.0
+sentencepiece==0.2.1
+protobuf==3.20.3
+einops==0.8.2
+matplotlib==3.10.8
+trimesh==4.11.4
+moderngl==5.12.0
+tqdm==4.67.3
+click==8.3.1
+requests==2.32.5
+filelock==3.20.3
+packaging==25.0

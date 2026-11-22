@@ -1,0 +1,82 @@
+{
+  "cohort": "paper-full",
+  "query_count": 3406,
+  "dataset_counts": {
+    "DIODE": 771,
+    "ETH3D": 454,
+    "HAMMER": 775,
+    "KITTI": 652,
+    "NYUv2": 654,
+    "iBims-1": 100
+  },
+  "configuration_count": 14,
+  "reference_count": 3406,
+  "unique_selected_reference_count": 1177,
+  "dataset_repo": "Ruicheng/monocular-geometry-evaluation",
+  "dataset_revision": "574610d77c0cc14d911a1ff46ec529ba934c8960",
+  "dataset_url": "https://huggingface.co/datasets/Ruicheng/monocular-geometry-evaluation",
+  "upstream_instructions": "https://github.com/microsoft/MoGe/blob/07444410f1e33f402353b99d6ccd26bd31e469e8/docs/eval.md",
+  "archives": [
+    {
+      "dataset": "DIODE",
+      "filename": "DIODE.zip",
+      "size_bytes": 572740140,
+      "sha256": "3f3047150d309f822fc5dc68aa9a67c7eb3a1eb358c65420e85ffb36274af98a",
+      "url": "https://huggingface.co/datasets/Ruicheng/monocular-geometry-evaluation/resolve/574610d77c0cc14d911a1ff46ec529ba934c8960/DIODE.zip"
+    },
+    {
+      "dataset": "ETH3D",
+      "filename": "ETH3D.zip",
+      "size_bytes": 1358222402,
+      "sha256": "a72592c238113e46e74cf29ca7df306a6c5c9d050de396cdd257d0ed2783ab10",
+      "url": "https://huggingface.co/datasets/Ruicheng/monocular-geometry-evaluation/resolve/574610d77c0cc14d911a1ff46ec529ba934c8960/ETH3D.zip"
+    },
+    {
+      "dataset": "HAMMER",
+      "filename": "HAMMER.zip",
+      "size_bytes": 402627213,
+      "sha256": "d5a92384b112db9d0b468de9700d639f071ff464b5501560f4a33bcfd6a27098",
+      "url": "https://huggingface.co/datasets/Ruicheng/monocular-geometry-evaluation/resolve/574610d77c0cc14d911a1ff46ec529ba934c8960/HAMMER.zip"
+    },
+    {
+      "dataset": "KITTI",
+      "filename": "KITTI.zip",
+      "size_bytes": 248798343,
+      "sha256": "598d2c9a722b8acefaad6eddb52dc4586678f5bec21de121587b8f5e62cb001a",
+      "url": "https://huggingface.co/datasets/Ruicheng/monocular-geometry-evaluation/resolve/574610d77c0cc14d911a1ff46ec529ba934c8960/KITTI.zip"
+    },
+    {
+      "dataset": "NYUv2",
+      "filename": "NYUv2.zip",
+      "size_bytes": 245955535,
+      "sha256": "b84a96bfe26db255d61983c39551dc1be6a00a460e2327a0e4084d663fa4e6ca",
+      "url": "https://huggingface.co/datasets/Ruicheng/monocular-geometry-evaluation/resolve/574610d77c0cc14d911a1ff46ec529ba934c8960/NYUv2.zip"
+    },
+    {
+      "dataset": "iBims-1",
+      "filename": "iBims-1.zip",
+      "size_bytes": 40777195,
+      "sha256": "27346601aa4c157afd3b8b8de1a9682587ca05844591051dfc702e64a5859402",
+      "url": "https://huggingface.co/datasets/Ruicheng/monocular-geometry-evaluation/resolve/574610d77c0cc14d911a1ff46ec529ba934c8960/iBims-1.zip"
+    }
+  ],
+  "roi_spec": "roi_samples.jsonl.gz",
+  "roi_spec_sha256": "22e935097a82a0692a3416ef9a90b30f1cdc5b8ef3b138c4a4f3f40a37bda074",
+  "reference_availability": "reference_availability.json",
+  "reference_availability_sha256": "755b28486cab9ecab7aaf7e2b5dc3ccc3ba6fc5332f5b155cf0e8267e6d5d52b",
+  "pixel_hash_semantics": "SHA256 of contiguous decoded uint8 RGB bytes, not PNG/JPEG file bytes",
+  "scope": "Complete six-dataset paper cohort; every query includes the frozen reference UID for each of 14 model settings. All references are members of the same cohort.",
+  "preparation": "Download the official processed RGB/depth archives separately. evaluation prepare computes crop coordinates and query/canvas geometry from official image dimensions, and pixel intrinsics from official meta.json. The bundled metadata retains sample identities, seeds, pixel checksums and frozen reference bindings.",
+  "excluded_assets": [
+    "RGB/depth dataset files",
+    "generated candidates",
+    "before-input RNG states",
+    "model weights"
+  ],
+  "source_spec_sha256": "d37d6cba5e43ec1b92a73db4d8d2434082fd02b4d78697440cf3711a3cbee346",
+  "computed_fields": {
+    "source.crop_xywh": "Symmetric center crop: x=round_half_even(W/6), y=round_half_even(H/6), width=W-2*x, height=H-2*y.",
+    "geometry": "Resize the crop with Pillow LANCZOS to width 640 and height max(128, round(crop_height*640/crop_width)); center it in a 1.5x canvas rounded up to multiples of 16.",
+    "camera": "Read normalized intrinsics from official meta.json as float64; multiply row 0 by original image width and row 1 by original image height, then subtract crop x/y from the principal point."
+  }
+}

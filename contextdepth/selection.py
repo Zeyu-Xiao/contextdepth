@@ -168,7 +168,9 @@ def reference_bias(depth: np.ndarray, gt: np.ndarray, mask: np.ndarray | None = 
     Use the same model's camera-conditioned reference Direct prediction. The
     support is every finite GT pixel strictly above 1e-6. An optional saved
     mask must equal that support. Invalid predictions on the support raise;
-    pixels are never silently removed and the bias is not clipped.
+    pixels are never silently removed and the bias is not clipped. A +inf
+    prediction ("infinitely far") stays on the support and enters the median
+    as +inf; the bias must still be finite.
     """
     prediction, target = _array(depth, "depth"), _array(gt, "gt")
     if target.ndim != 2 or prediction.shape != target.shape or not all(target.shape):
@@ -182,9 +184,12 @@ def reference_bias(depth: np.ndarray, gt: np.ndarray, mask: np.ndarray | None = 
             raise ValueError("Reference mask differs from the full finite-positive GT support")
     if not support.any():
         raise ValueError("Empty reference GT support")
-    if np.any(support & (~np.isfinite(prediction) | (prediction <= DEPTH_EPS))):
+    if np.any(support & (np.isnan(prediction) | (prediction <= DEPTH_EPS))):
         raise ValueError("Invalid reference prediction on fixed GT support; no pixels dropped")
-    return float(np.median(np.log(prediction[support]) - np.log(target[support])))
+    bias = float(np.median(np.log(prediction[support]) - np.log(target[support])))
+    if not math.isfinite(bias):
+        raise ValueError("Reference prediction is infinite on most of its GT support")
+    return bias
 
 
 def reference_camera(K: np.ndarray, fixed_w: int, fixed_h: int, dimensions: int = 2) -> np.ndarray:

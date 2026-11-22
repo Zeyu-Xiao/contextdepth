@@ -1,0 +1,53 @@
+{
+  "cohort": "iBims-1-100",
+  "query_count": 100,
+  "reference_count": 67,
+  "unique_image_count": 113,
+  "reference_only_images_by_dataset": {
+    "ETH3D": 8,
+    "DIODE": 2,
+    "HAMMER": 2,
+    "NYUv2": 1
+  },
+  "dataset_repo": "Ruicheng/monocular-geometry-evaluation",
+  "dataset_revision": "574610d77c0cc14d911a1ff46ec529ba934c8960",
+  "dataset_url": "https://huggingface.co/datasets/Ruicheng/monocular-geometry-evaluation",
+  "upstream_instructions": "https://github.com/microsoft/MoGe/blob/main/docs/eval.md",
+  "archives": [
+    {
+      "filename": "iBims-1.zip",
+      "size_bytes": 40777195,
+      "sha256": "27346601aa4c157afd3b8b8de1a9682587ca05844591051dfc702e64a5859402"
+    },
+    {
+      "filename": "ETH3D.zip",
+      "size_bytes": 1358222402,
+      "sha256": "a72592c238113e46e74cf29ca7df306a6c5c9d050de396cdd257d0ed2783ab10"
+    },
+    {
+      "filename": "DIODE.zip",
+      "size_bytes": 572740140,
+      "sha256": "3f3047150d309f822fc5dc68aa9a67c7eb3a1eb358c65420e85ffb36274af98a"
+    },
+    {
+      "filename": "HAMMER.zip",
+      "size_bytes": 402627213,
+      "sha256": "d5a92384b112db9d0b468de9700d639f071ff464b5501560f4a33bcfd6a27098"
+    },
+    {
+      "filename": "NYUv2.zip",
+      "size_bytes": 245955535,
+      "sha256": "b84a96bfe26db255d61983c39551dc1be6a00a460e2327a0e4084d663fa4e6ca"
+    }
+  ],
+  "roi_spec": "ibims100_with_references.jsonl",
+  "roi_spec_sha256": "42b2938288d30329e9f4bcb85068652d61de28aa6d1e6793fbc4a66c6becc78f",
+  "pixel_hash_semantics": "SHA256 of contiguous decoded uint8 RGB bytes, not PNG/JPEG file bytes",
+  "scope": "100 iBims-1 queries and their 67 historical mixed-bank references; not the complete paper cohort",
+  "excluded_assets": [
+    "RGB/depth dataset files",
+    "generated candidates",
+    "before-input RNG states",
+    "model weights"
+  ]
+}

@@ -34,6 +34,7 @@ SOURCES = (
     Source("UniDepth", "https://github.com/lpiccinelli-eth/UniDepth.git", "8d8cfe4c7ee15297099983607febf0d4f32eb3d6"),
     Source("UniK3D", "https://github.com/lpiccinelli-eth/UniK3D.git", "29f7862f3c3ee79c53ef0153dfc901ce511df575", patch="unik3d_optional_logging.patch"),
     Source("ml-depth-pro", "https://github.com/apple/ml-depth-pro.git", "9efe5c1def37a26c5367a71df664b18e1306c708"),
+    Source("ml-depth-pro-2", "https://github.com/apple-aiml-research/ml-depth-pro-2.git", "aa389cbb0b74341664ed663a0966c859905cd6c0"),
     Source("OneReward", "https://github.com/bytedance/OneReward.git", "0d8d826d9e383c32ad97b39f01bd6872e3ea7aa4", group="generation"),
 )
 
@@ -105,10 +106,13 @@ def main():
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--install", action="store_true", help="Clone missing pinned trees and apply the two compatibility patches")
     mode.add_argument("--check", action="store_true", help="Check existing trees and patches without changing them")
-    parser.add_argument("--group", choices=("all", "depth", "generation"), default="all")
+    parser.add_argument("--group", choices=("all", "core", "depth", "generation"), default="all",
+                        help="core fetches only OneReward, MoGe2 and its utils3d dependency")
     parser.add_argument("--directory", type=Path, default=ROOT / "third_party")
     args = parser.parse_args()
-    selected = [source for source in SOURCES if args.group == "all" or source.group == args.group]
+    core = {"MoGe2", "utils3d", "OneReward"}
+    selected = [source for source in SOURCES if args.group == "all" or source.group == args.group
+                or (args.group == "core" and source.name in core)]
     if not args.install and not args.check:
         print(json.dumps({"mode": "plan_only", "directory": str(args.directory),
                           "sources": [asdict(source) for source in selected]}, indent=2))

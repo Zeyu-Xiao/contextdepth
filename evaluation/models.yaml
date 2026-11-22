@@ -1,0 +1,92 @@
+# Paths are relative to this YAML file. Point them to existing local
+# checkouts/checkpoints when needed. No checkpoint is bundled here.
+default_experiment: moge2
+outpainting:
+  implementation: contextdepth.outpainting:OneRewardOutpainter
+  source: ../third_party/OneReward
+  base_model: ../weights/FLUX.1-Fill-dev
+  weights: ../weights/OneReward/diffusers-bf16
+retrieval:
+  checkpoint: ../weights/siglip2-so400m-patch16-384-vision
+models:
+  moge2:
+    implementation: baselines.moge:MoGe2
+    source: ../third_party/MoGe2
+    weights: ../weights/moge-2-vitl-normal/model.pt
+  moge3:
+    implementation: baselines.moge:MoGe3
+    source: ../third_party/MoGe3
+    weights: ../weights/moge-3-vitg/model.pt
+    flex_gemm_source: ../third_party/FlexGEMM
+    utils3d_source: ../third_party/utils3d-moge
+  da3nested:
+    implementation: baselines.da3:DA3Nested
+    source: ../third_party/Depth-Anything-3/src
+    weights: ../weights/DA3NESTED-GIANT-LARGE-1.1
+  da3metric:
+    implementation: baselines.da3:DA3Metric
+    source: ../third_party/Depth-Anything-3/src
+    weights: ../weights/DA3METRIC-LARGE
+  unik3d:
+    implementation: baselines.unik3d:UniK3D
+    source: ../third_party/UniK3D
+    weights: ../weights/unik3d-vitl
+  unidepth:
+    implementation: baselines.unidepth:UniDepth
+    source: ../third_party/UniDepth
+    weights: ../weights/unidepth-v2-vitl14
+  depth_pro:
+    implementation: baselines.depth_pro:DepthPro
+    source: ../third_party/ml-depth-pro/src
+    weights: ../weights/depth_pro.pt
+  depth_pro2:
+    implementation: baselines.depth_pro2:DepthPro2
+    source: ../third_party/ml-depth-pro-2/src
+    weights: ../weights/depth_pro2
+
+# Experiments select plugins and declare their camera/context/reference setup.
+# Adding a backend does not require a Python registry or runner modification.
+#
+# This is the crop protocol of the paper's Table 1: the query is the centre crop,
+# every candidate adds 25% context per side (context_fraction: 0.25), and each
+# model has one experiment without and one with the ground-truth camera.
+#
+# camera_source: query (UniDepth V2 and UniK3D, no GT camera) estimates the camera
+# once on the query and reuses it for the outpainted candidates. The other models
+# estimate a camera on every input. Selection always observes per-candidate cameras.
+experiments:
+  moge3_unknown:
+    {baseline: moge3, camera: unknown, context_fraction: 0.25, reference: moge3_known}
+  moge3_known:
+    {baseline: moge3, camera: known, context_fraction: 0.25, reference: moge3_known}
+  da3nested:
+    {baseline: da3nested, camera: unknown, context_fraction: 0.25, reference: da3nested_reference}
+  da3metric_gt_focal:
+    {baseline: da3metric, camera: known, context_fraction: 0.25, reference: da3metric_gt_focal}
+  moge2:
+    {baseline: moge2, camera: unknown, context_fraction: 0.25, reference: moge2_gt_fov}
+  moge2_gt_fov:
+    {baseline: moge2, camera: known, context_fraction: 0.25, reference: moge2_gt_fov}
+  unik3d_unknown:
+    {baseline: unik3d, camera: unknown, camera_source: query, context_fraction: 0.25, reference: unik3d_known}
+  unik3d_known:
+    {baseline: unik3d, camera: known, context_fraction: 0.25, reference: unik3d_known}
+  depth_pro:
+    {baseline: depth_pro, camera: unknown, context_fraction: 0.25, reference: depth_pro_gt_focal}
+  depth_pro_gt_focal:
+    {baseline: depth_pro, camera: known, context_fraction: 0.25, reference: depth_pro_gt_focal}
+  unidepth_v2_vitl14:
+    {baseline: unidepth, camera: unknown, camera_source: query, context_fraction: 0.25, reference: unidepth_reference}
+  unidepth_gt_k:
+    {baseline: unidepth, camera: known, context_fraction: 0.25, reference: unidepth_reference}
+  depth_pro2:
+    {baseline: depth_pro2, camera: unknown, context_fraction: 0.25, reference: depth_pro2_gt_focal}
+  depth_pro2_gt_focal:
+    {baseline: depth_pro2, camera: known, context_fraction: 0.25, reference: depth_pro2_gt_focal}
+  # Reference-bank calibrations that differ from the query-side experiment.
+  da3nested_reference:
+    {baseline: da3nested, camera: known, context_fraction: 0.25, reference: da3nested_reference, reference_only: true}
+  # The paper calibrated UniDepth references with K corrected for internal resize rounding.
+  unidepth_reference:
+    {baseline: unidepth, camera: known, context_fraction: 0.25, reference: unidepth_reference, reference_only: true,
+     options: {compensate_camera: true}}

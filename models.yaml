@@ -1,6 +1,11 @@
 # Paths are relative to this YAML file. Point them to existing local
 # checkouts/checkpoints when needed. No checkpoint is bundled here.
+default_depth_model: moge2
+expansion: 0.1
+seeds: [0, 1, 2]
+depth_batch_size: 1
 outpainting:
+  implementation: contextdepth.outpainting:OneRewardBaseline
   source: third_party/OneReward
   base_model: weights/FLUX.1-Fill-dev
   weights: weights/OneReward/diffusers-bf16
@@ -8,25 +13,36 @@ retrieval:
   checkpoint: weights/siglip2-so400m-patch16-384-vision
 models:
   moge2:
+    implementation: baselines.moge:MoGe2
     source: third_party/MoGe2
     weights: weights/moge-2-vitl-normal/model.pt
   moge3:
+    implementation: baselines.moge:MoGe3
     source: third_party/MoGe3
     weights: weights/moge-3-vitg/model.pt
     flex_gemm_source: third_party/FlexGEMM
     utils3d_source: third_party/utils3d-moge
   da3nested:
+    implementation: baselines.da3:DA3Nested
     source: third_party/Depth-Anything-3/src
     weights: weights/DA3NESTED-GIANT-LARGE-1.1
   da3metric:
+    implementation: baselines.da3:DA3Metric
     source: third_party/Depth-Anything-3/src
     weights: weights/DA3METRIC-LARGE
   unik3d:
+    implementation: baselines.unik3d:UniK3D
     source: third_party/UniK3D
     weights: weights/unik3d-vitl
   unidepth:
+    implementation: baselines.unidepth:UniDepth
     source: third_party/UniDepth
     weights: weights/unidepth-v2-vitl14
   depth_pro:
+    implementation: baselines.depth_pro:DepthPro
     source: third_party/ml-depth-pro/src
     weights: weights/depth_pro.pt
+  depth_pro2:
+    implementation: baselines.depth_pro2:DepthPro2
+    source: third_party/ml-depth-pro-2/src
+    weights: weights/depth_pro2

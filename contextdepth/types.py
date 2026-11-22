@@ -9,11 +9,12 @@ import numpy as np
 
 @dataclass(frozen=True)
 class Geometry:
-    """ROI in the model input, and the resolution at which depth is returned.
+    """Experimental ROI and evaluation grid, plus legacy inference budgets.
 
     fixed_w/h describe the query's original evaluation grid. The ROI may have
     been resized for the historical benchmark. For ordinary user inputs these
-    equal roi_width/height. Intrinsics are always supplied on the fixed grid.
+    equal roi_width/height. Intrinsics are supplied on the fixed grid. Adapters
+    always return the complete input grid; only evaluation applies this ROI.
     """
 
     fixed_w: int
@@ -47,16 +48,25 @@ class InferenceInput:
     """A model call contains RGB, geometry, identity and optional calibration.
 
     camera is pixel K on fixed_w x fixed_h, only set for known-camera calls.
+    query_camera is the opaque ``Prediction.camera_state`` that the same
+    adapter returned for the unexpanded query; an unknown-camera call on an
+    outpainted candidate may carry it to reuse the query's estimated camera.
     No ground-truth depth or evaluation mask enters this interface.
     """
 
     uid: str
     arm: str
     rgb: np.ndarray
-    geometry: Geometry
+    geometry: Geometry | None = None
     camera: np.ndarray | None = None
     setting: str = "unknown"
     rng_state: dict[str, Any] | None = None
+    query_camera: Any = None
+
+    def __post_init__(self):
+        if self.geometry is None:
+            h, w = self.rgb.shape[:2]
+            self.geometry = Geometry(w, h, w, h, 0, 0, w, h)
 
     @property
     def baseline(self) -> bool:
@@ -64,7 +74,32 @@ class InferenceInput:
 
 
 @dataclass
+class CameraEstimate:
+    """Camera of the complete input RGB, independent of evaluation crops.
+
+    Focal lengths use input-image pixels (one or two axes). A non-pinhole
+    model may provide its complete CHW ray field instead. Native intrinsics
+    and the image resize stages optionally retain coordinate-transform
+    provenance for exact projection onto historical evaluation grids.
+    """
+
+    focal_px: np.ndarray | None = None
+    intrinsics: np.ndarray | None = None
+    rays: np.ndarray | None = None
+    source_intrinsics: np.ndarray | None = None
+    resize_factors: tuple[tuple[float, float], ...] = ()
+
+
+@dataclass
 class Prediction:
+    """Metric camera-Z depth on the complete RGB input grid, without a crop.
+
+    camera_state is optional and adapter-defined: whatever the adapter needs
+    to apply this input's estimated camera to a larger canvas later on. It is
+    never serialized and never interpreted outside the adapter.
+    """
+
     depth: np.ndarray
-    camera_log_focal: np.ndarray | None = None
+    camera: CameraEstimate | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    camera_state: Any = None

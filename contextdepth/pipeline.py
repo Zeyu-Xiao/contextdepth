@@ -1,408 +1,274 @@
-"""Resumable stages with persistent GPU workers and bounded CPU prefetch.
+"""Normal RGB inference: generation and depth adapters, with optional DIODE selection.
 
-The only dependencies between stages are ordinary files. Generation and depth
-can run in different environments or on different machines using the same
-manifest. No model, image encoder or reference is loaded per query.
+This module does not load evaluation manifests, crop dataset ROIs, or score GT.
+The paper runner lives in ``evaluation`` and uses the same model adapters and
+selection mathematics with its recorded preprocessing protocol.
 """
 from __future__ import annotations
 
-from collections import defaultdict, deque
-from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
-from dataclasses import asdict
-import multiprocessing as mp
-import os
+from copy import deepcopy
+from dataclasses import dataclass
 from pathlib import Path
-import time
 
 import numpy as np
 from PIL import Image
-from tqdm import tqdm
 
-from .cache import digest, file_revision, file_sha256, input_revision, model_revision
-from .config import CONFIGS, model_paths
-from .geometry import canvas_geometry, crop_context
-from .io import load_manifest, load_rgb, read_json, resolve, write_json, write_npz
-from .metrics import aggregate, score_depth
-from .selection import pairwise_log_ratios, reference_bias, reference_camera, select_known, select_unknown
-from .types import Geometry, InferenceInput
-
-_WORKER = {}
+from .camera import camera_features, crop_prediction, pixel_intrinsics
+from .config import load_runtime_config
+from .generation import Outpainting, create_outpainter
+from .io import load_rgb, write_json, write_npz
+from .models import load_implementation
+from .selection import (Selection, pairwise_log_ratios, reference_bias,
+                        reference_camera, select_known, select_unknown)
+from .types import InferenceInput, Prediction
 
 
-def sample_geometry(row, rgb=None):
-    if "geometry" in row:
-        return Geometry.from_dict(row["geometry"])
-    if rgb is None:
-        raise ValueError("Geometry or decoded RGB required")
-    return canvas_geometry(rgb.shape[1], rgb.shape[0])
+def _image(value):
+    if isinstance(value, (str, Path)):
+        return load_rgb(value)
+    if isinstance(value, Image.Image):
+        value = np.asarray(value.convert("RGB"))
+    rgb = np.asarray(value)
+    if rgb.dtype != np.uint8 or rgb.ndim != 3 or rgb.shape[2] != 3 or min(rgb.shape[:2]) < 1:
+        raise ValueError("Expected a nonempty uint8 RGB array, PIL image, or image path")
+    return np.ascontiguousarray(rgb)
 
 
-def candidate_path(row, index):
-    paths = row.get("candidates", [f"outpaintings/{row['uid']}/candidate{i}.png" for i in range(3)])
-    if len(paths) != 3:
-        raise ValueError(f"Exactly three candidates required for {row['uid']}")
-    return paths[index]
+def _save_prediction(path, prediction):
+    arrays = {"depth": prediction.depth}
+    if prediction.camera is not None:
+        for key in ("intrinsics", "focal_px", "rays"):
+            value = getattr(prediction.camera, key)
+            if value is not None:
+                arrays[key] = value
+    write_npz(path, **arrays)
 
 
-def _device_init(devices, role, paths, model_name=None, root=None, output=None, fraction=None, overwrite=False):
-    gpu = devices.get()
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu)
-    import torch
-    torch.set_num_threads(2)
-    import cv2
-    cv2.setNumThreads(1)
-    if role == "generation":
-        from .outpainting import OneRewardOutpainter
-        engine = OneRewardOutpainter(paths, device="cuda:0")
-    else:
-        from .models import create_model
-        engine = create_model(model_name, paths, device="cuda:0")
-    _WORKER.update(engine=engine, root=Path(root), output=Path(output), name=model_name,
-                   fraction=fraction, overwrite=overwrite, role=role, gpu=gpu)
+@dataclass
+class ContextPrediction:
+    outpainting: Outpainting
+    prediction: Prediction
 
 
-def _pool(gpus, workers_per_gpu, initializer_args, max_tasks=None):
-    if not gpus or workers_per_gpu < 1:
-        raise ValueError("Choose at least one GPU and one worker per GPU")
-    # Set limits before spawn imports NumPy/BLAS in the children.
-    for key in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS"):
-        os.environ[key] = "2"
-    context = mp.get_context("spawn")
-    devices = context.Queue()
-    visible = os.environ.get("CUDA_VISIBLE_DEVICES")
-    available = visible.split(",") if visible else None
-    slots = []
-    for _ in range(workers_per_gpu):
-        for gpu in gpus:
-            slots.append(available[gpu] if available is not None else gpu)
-    if max_tasks is not None:
-        slots = slots[:max_tasks]
-    for slot in slots:
-        devices.put(slot)
-    return ProcessPoolExecutor(max_workers=len(slots),
-                               mp_context=context, initializer=_device_init,
-                               initargs=(devices, *initializer_args))
+@dataclass
+class ContextDepthResult:
+    """Full-image outputs; selected is present only when DIODE is enabled."""
+    direct: Prediction
+    candidates: list[ContextPrediction]
+    selected: Prediction | None = None
+    selection: Selection | None = None
+    reference_uid: str | None = None
+
+    def save(self, directory):
+        directory = Path(directory)
+        directory.mkdir(parents=True, exist_ok=True)
+        _save_prediction(directory / "direct.npz", self.direct)
+        records = []
+        for i, candidate in enumerate(self.candidates):
+            Image.fromarray(candidate.outpainting.rgb).save(directory / f"candidate{i}.png")
+            _save_prediction(directory / f"candidate{i}.npz", candidate.prediction)
+            records.append({"seed": candidate.outpainting.seed,
+                            "query_bbox": list(candidate.outpainting.bbox)})
+        if self.selected is not None:
+            _save_prediction(directory / "selected.npz", self.selected)
+        elif (directory / "selected.npz").is_file():
+            (directory / "selected.npz").unlink()
+        write_json(directory / "result.json", {
+            "candidates": records, "reference_uid": self.reference_uid,
+            "selected_arm": None if self.selection is None else self.selection.selected_arm,
+            "depth_unit": "metres", "depth_semantics": "camera Z"})
+        return directory
 
 
-def _generate_batch(batch):
-    root, engine = _WORKER["root"], _WORKER["engine"]
-    with ThreadPoolExecutor(max_workers=min(4, len(batch))) as pool:
-        rgbs = list(pool.map(lambda item: load_rgb(resolve(root, item[0]["image"])), batch))
-    rows, indices = zip(*batch)
-    geometries = [sample_geometry(row, rgb) for row, rgb in zip(rows, rgbs)]
-    from .outpainting import seed_from_uid
-    seeds = [row["seeds"][i] if "seeds" in row else seed_from_uid(row["uid"], i) for row, i in batch]
-    images = engine.generate(rgbs, [r["uid"] for r in rows], list(indices), geometries, seeds)
-    if len(images) != len(batch):
-        raise ValueError("Outpainter returned an incomplete batch")
+class ContextDepthPipeline:
+    """Load OneReward and MoGe-2 lazily, or supply custom black-box adapters.
 
-    def save(item):
-        row, i, rgb = item
-        path = resolve(root, candidate_path(row, i))
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_name(f"{path.name}.{os.getpid()}.partial")
-        Image.fromarray(rgb).save(temporary, format="PNG", compress_level=3)
-        os.replace(temporary, path)
-        write_json(path.with_suffix(".json"), {"uid": row["uid"], "candidate": i,
-                   "cache_key": row.get("_generation_cache_key"), "sha256": file_sha256(path)})
+    ``generate`` and ``estimate_depth`` can be used separately. Calling the
+    pipeline returns the original image prediction and all generated-image
+    predictions. Reference selection is disabled by default; opt in with
+    ``reference_bank='diode', diode_root=...`` after downloading DIODE.
+    """
 
-    with ThreadPoolExecutor(max_workers=min(4, len(batch))) as pool:
-        list(pool.map(save, [(r, i, rgb) for (r, i), rgb in zip(batch, images)]))
-    return len(batch)
-
-
-def generate(manifest_path, config, *, data_root=None, gpus=(0,), batch_size=1, workers_per_gpu=1, overwrite=False):
-    manifest, root = load_manifest(manifest_path, data_root)
-    if batch_size < 1:
-        raise ValueError("Generation batch size must be positive")
-    groups = defaultdict(list)
-    protected = {resolve(root, r[field]).resolve() for r in [*manifest["samples"], *manifest.get("references", [])]
-                 for field in ("image", "retrieval_image", "depth") if field in r}
-    protected.add(Path(manifest_path).resolve())
-    protected.update(resolve(root, value).resolve()
-                     for r in [*manifest["samples"], *manifest.get("references", [])]
-                     for field in ("rng_states", "reference_rng_states")
-                     for value in r.get(field, {}).values())
-    destinations = set()
-    recipe = model_revision(config["outpainting"])
-    from .outpainting import seed_from_uid
-    for row in manifest["samples"]:
-        rgb = None if "geometry" in row else load_rgb(resolve(root, row["image"]))
-        geometry = sample_geometry(row, rgb)
-        for index in range(3):
-            path = resolve(root, candidate_path(row, index))
-            marker = path.with_suffix(".json")
-            outputs = {path.resolve(), marker.resolve()}
-            if len(outputs) != 2 or outputs & protected or outputs & destinations:
-                raise ValueError(f"Candidate output or completion marker would overwrite an input or another output: {path}")
-            destinations.update(outputs)
-            key = digest({"input": file_revision(resolve(root, row["image"])),
-                          "geometry": geometry.as_dict(), "recipe": recipe, "batch_size": batch_size,
-                          "seed": row["seeds"][index] if "seeds" in row else seed_from_uid(row["uid"], index)})
-            reusable = False
-            if not overwrite and path.is_file():
-                if marker.is_file():
-                    metadata = read_json(marker)
-                    reusable = metadata.get("cache_key") == key and metadata.get("sha256") == file_sha256(path)
-                elif "candidate_sha256" in row:
-                    reusable = row["candidate_sha256"][index] == file_sha256(path)
-            if not reusable:
-                groups[geometry.canvas_width, geometry.canvas_height].append(({**row, "_generation_cache_key": key}, index))
-    jobs = [items[i:i + batch_size] for _, items in sorted(groups.items()) for i in range(0, len(items), batch_size)]
-    if not jobs:
-        return
-    with _pool(gpus, workers_per_gpu, ("generation", config["outpainting"], None, root, root, None, overwrite), len(jobs)) as pool:
-        with tqdm(total=sum(map(len, jobs)), desc="Outpainting") as progress:
-            for completed in pool.map(_generate_batch, jobs, chunksize=1):
-                progress.update(completed)
-
-
-def _prepare(row):
-    root, role = _WORKER["root"], _WORKER["role"]
-    rgb = load_rgb(resolve(root, row["image"]))
-    geometry = sample_geometry(row, rgb)
-    if rgb.shape != (geometry.roi_height, geometry.roi_width, 3):
-        raise ValueError(f"Query dimensions differ from the manifest: {row['uid']}")
-    known = role == "reference" or CONFIGS[_WORKER["name"]][1] == "known"
-    camera = np.asarray(row["camera"], np.float64) if known else None
-    direct_arm = "reference" if role == "reference" and _WORKER["name"] == "moge3_known" else "direct"
-    requests = [InferenceInput(row["uid"], direct_arm, rgb, geometry.direct(), camera, "known" if known else "unknown")]
-    if role != "reference":
-        for i in range(3):
-            expanded = load_rgb(resolve(root, candidate_path(row, i)))
-            if expanded.shape != (geometry.canvas_height, geometry.canvas_width, 3):
-                raise ValueError(f"Candidate {i} dimensions differ for {row['uid']}")
-            if not np.array_equal(expanded[geometry.roi_slices], rgb):
-                raise ValueError(f"Candidate {i} changed query pixels for {row['uid']}")
-            current = geometry
-            # The historical 25% canvas includes its alignment border.
-            if _WORKER["fraction"] != .25:
-                expanded, current = crop_context(expanded, geometry, _WORKER["fraction"])
-            requests.append(InferenceInput(row["uid"], f"candidate{i}", expanded, current, camera, "known" if known else "unknown"))
-    state_field = "reference_rng_states" if role == "reference" else "rng_states"
-    state_path = row.get(state_field, {}).get(_WORKER["name"])
-    if state_path:
-        with np.load(resolve(root, state_path), allow_pickle=False) as states:
-            for request in requests:
-                prefix = ("direct" if request.arm == "reference" else request.arm) + "__"
-                request.rng_state = {k[len(prefix):]: np.array(states[k], copy=True)
-                                     for k in states.files if k.startswith(prefix)}
-                if not request.rng_state:
-                    raise ValueError(f"Missing before-input RNG state: {row['uid']}/{request.arm}")
-    return row, requests
-
-
-def _result_paths(row):
-    folder = _WORKER["output"] / ("references" if _WORKER["role"] == "reference" else "predictions") / _WORKER["name"]
-    return folder / f"{row['uid']}.npz", folder / f"{row['uid']}.json"
-
-
-def _finish_prediction(row, requests, predictions, elapsed):
-    if len(predictions) != len(requests):
-        raise ValueError(f"Depth backend returned an incomplete batch for {row['uid']}")
-    for req, pred in zip(requests, predictions):
-        if pred.depth.shape != (req.geometry.fixed_h, req.geometry.fixed_w):
-            raise ValueError(f"Depth backend returned the wrong output grid for {row['uid']}/{req.arm}")
-    arrays_path, record_path = _result_paths(row)
-    arrays = {"direct" if req.arm == "reference" else req.arm: pred.depth for req, pred in zip(requests, predictions)}
-    record = dict(uid=row["uid"], dataset=row.get("dataset", "custom"), config=_WORKER["name"],
-                  seconds=elapsed, geometry=requests[-1].geometry.as_dict(),
-                  input_revision=row.get("_input_revision"), cache_key=row.get("_cache_key"))
-    if _WORKER["role"] == "reference":
-        with np.load(resolve(_WORKER["root"], row["depth"]), allow_pickle=False) as gt_file:
-            gt = gt_file["depth"]
-            mask = gt_file["mask"] if "mask" in gt_file else None
-        record["bias"] = reference_bias(predictions[0].depth, gt, mask)
-    else:
-        pairwise = pairwise_log_ratios([pred.depth for pred in predictions])
-        record["pairwise"] = pairwise.tolist()
-        if CONFIGS[_WORKER["name"]][1] == "unknown":
-            record["candidate_cameras"] = [np.asarray(pred.camera_log_focal, np.float64).tolist() for pred in predictions[1:]]
-    record["inference"] = [pred.metadata for pred in predictions]
-    write_npz(arrays_path, **arrays)
-    # The JSON is the completion marker; an interrupted array write is rerun.
-    write_json(record_path, record)
-    return row["uid"]
-
-
-def _predict_chunk(rows):
-    needed = rows  # Parent checks cache identities before loading GPU models.
-    engine = _WORKER["engine"]
-    # Preload two queries and overlap depth execution with CPU observations and
-    # uncompressed array writes. Memory stays bounded independently of cohort size.
-    with ThreadPoolExecutor(max_workers=2) as readers, ThreadPoolExecutor(max_workers=2) as writers:
-        prefetch, finishing = {}, deque()
-        for i in range(min(2, len(needed))):
-            prefetch[i] = readers.submit(_prepare, needed[i])
-        for i in range(len(needed)):
-            row, requests = prefetch.pop(i).result()
-            if i + 2 < len(needed):
-                prefetch[i + 2] = readers.submit(_prepare, needed[i + 2])
-            start = time.monotonic()
-            maximum = max(1, getattr(engine, "max_batch_size", 1))
-            predictions = list(engine.predict(requests[:1]))
-            # Direct and context have different shapes; do not stack those into
-            # one model call. Adapters expose a larger batch only when supported.
-            candidates = requests[1:]
-            for begin in range(0, len(candidates), maximum):
-                predictions.extend(engine.predict(candidates[begin:begin + maximum]))
-            finishing.append(writers.submit(_finish_prediction, row, requests, predictions, time.monotonic() - start))
-            if len(finishing) >= 2:
-                finishing.popleft().result()
-        for future in finishing:
-            future.result()
-    return len(rows)
-
-
-def _depth_jobs(name, rows, role, config, root, output, gpus, workers_per_gpu, overwrite):
-    if not rows:
-        return
-    folder = Path(output) / ("references" if role == "reference" else "predictions") / name
-    recipe = model_revision(model_paths(config, name))
-    needed = []
-    for row in rows:
-        revision = input_revision(row, root, name, role)
-        key = digest({"input": revision, "model": name, "recipe": recipe})
-        record = folder / f"{row['uid']}.json"
-        if not overwrite and record.is_file() and (folder / f"{row['uid']}.npz").is_file():
-            if read_json(record).get("cache_key") == key:
-                continue
-        needed.append({**row, "_input_revision": revision, "_cache_key": key})
-    rows = needed
-    if not rows:
-        return
-    fraction = CONFIGS[name][2] if role == "query" else None
-    # Small dynamic shards share the queue across GPUs; a slow dataset does not
-    # strand cards assigned to faster datasets.
-    shard_size = max(1, min(16, (len(rows) + len(gpus) * workers_per_gpu - 1) // (len(gpus) * workers_per_gpu)))
-    jobs = [rows[i:i + shard_size] for i in range(0, len(rows), shard_size)]
-    with _pool(gpus, workers_per_gpu, (role, model_paths(config, name), name, root, output, fraction, overwrite), len(jobs)) as pool:
-        with tqdm(total=len(rows), desc=f"{name}: {role}") as progress:
-            for completed in pool.map(_predict_chunk, jobs, chunksize=1):
-                progress.update(completed)
-
-
-def reference_ids(manifest, names, retrieval=None):
-    """Use saved paper retrieval IDs or a newly computed RGB-only retrieval."""
-    ids = {}
-    references = {r["uid"]: r for r in manifest.get("references", manifest["samples"])}
-    for name in names:
-        ids[name] = {}
-        for row in manifest["samples"]:
-            if retrieval is not None:
-                mapping = retrieval[name] if isinstance(retrieval.get(name), dict) else retrieval
-                ids[name][row["uid"]] = mapping[row["uid"]]
-            else:
-                ids[name][row["uid"]] = row["paper_reference_ids"][name]
-            ref = references[ids[name][row["uid"]]]
-            if ref["uid"] == row["uid"] or (row.get("scene_group") and ref.get("scene_group") == row["scene_group"]):
-                raise ValueError(f"Reference must exclude the query and its scene: {row['uid']} → {ref['uid']}")
-    return ids
-
-
-def predict(manifest_path, config, names, *, output, data_root=None, gpus=(0,), workers_per_gpu=1, retrieval=None, overwrite=False):
-    manifest, root = load_manifest(manifest_path, data_root)
-    if manifest.get("protocol") == "paper-roi":
-        for name in names:
-            if name.startswith("da3") and any(name not in r.get("rng_states", {}) for r in manifest["samples"]):
-                raise ValueError("Paper DA3 reproduction requires the exported before-input RNG states; import the benchmark assets first")
-    ids = reference_ids(manifest, names, retrieval)
-    references = {r["uid"]: r for r in manifest.get("references", manifest["samples"])}
-    needed = defaultdict(set)
-    for name in names:
-        needed[CONFIGS[name][3]].update(ids[name].values())
-    for name, uids in needed.items():
-        _depth_jobs(name, [references[uid] for uid in sorted(uids)], "reference", config, root, output, gpus, workers_per_gpu, overwrite)
-    for name in names:
-        _depth_jobs(name, manifest["samples"], "query", config, root, output, gpus, workers_per_gpu, overwrite)
-    write_json(Path(output) / "reference_ids.json", ids)
-
-
-def select(manifest_path, names, *, output, data_root=None, workers=8):
-    manifest, root = load_manifest(manifest_path, data_root)
-    output = Path(output)
-    ids = read_json(output / "reference_ids.json")
-    for name in names:
-        reference_ids(manifest, [name], ids[name])
-    references = {r["uid"]: r for r in manifest.get("references", manifest["samples"])}
-    calibration = {}
-    for name in names:
-        ref_name = CONFIGS[name][3]
-        for uid in set(ids[name].values()):
-            record = read_json(output / "references" / ref_name / f"{uid}.json")
-            if record.get("input_revision") != input_revision(references[uid], root, ref_name, "reference"):
-                raise ValueError(f"Reference inputs changed since calibration: {uid}; rerun predict")
-            calibration[name, uid] = record
-
-    def one(job):
-        name, row = job
-        uid = row["uid"]
-        observation = read_json(output / "predictions" / name / f"{uid}.json")
-        if observation.get("input_revision") != input_revision(row, root, name, "query"):
-            raise ValueError(f"Inputs changed since depth inference: {uid}; rerun predict")
-        reference_uid = ids[name][uid]
-        reference_record = calibration[name, reference_uid]
-        bias = reference_record["bias"]
-        matrix = np.asarray(observation["pairwise"], np.float64)
-        if CONFIGS[name][1] == "known":
-            result = select_known(matrix[1:, 0], bias)
+    def __init__(self, *, config=None, depth_model=None, outpainter=None,
+                 device="cuda:0", depth_batch_size=None, expansion=None, seeds=None,
+                 reference_bank=None, diode_root=None, depth_options=None,
+                 generation_options=None, outpainter_paths=None):
+        self.config = load_runtime_config(config)
+        self.device = str(device)
+        self.depth_model = self.config.get("default_depth_model", "moge2") if depth_model is None else depth_model
+        self._depth_owned = not (hasattr(self.depth_model, "predict") and not isinstance(self.depth_model, type))
+        self.expansion = self.config.get("expansion", 0.1) if expansion is None else expansion
+        self.seeds = tuple(self.config.get("seeds", (0, 1, 2)) if seeds is None else seeds)
+        configured_batch = (self.config.get("depth_batch_size", 1) if self._depth_owned else
+                            getattr(self.depth_model, "max_batch_size", 1))
+        self.depth_batch_size = configured_batch if depth_batch_size is None else depth_batch_size
+        if (isinstance(self.depth_batch_size, bool) or not isinstance(self.depth_batch_size, int)
+                or self.depth_batch_size < 1):
+            raise ValueError("depth_batch_size must be a positive integer")
+        if not self._depth_owned and self.depth_batch_size != configured_batch:
+            raise ValueError("A supplied depth instance keeps its configured batch size")
+        self.depth_options = deepcopy(depth_options or {})
+        self.generation_options = deepcopy(generation_options or {})
+        self.outpainter_paths = deepcopy(outpainter_paths or {})
+        self._outpainter_spec, self._outpainter = outpainter, None
+        self._outpainter_owned = outpainter is None or isinstance(outpainter, (str, type))
+        self._depth, self._depth_setting = None, None
+        self._reference_calibration = {}
+        if reference_bank not in (None, False, "diode"):
+            raise ValueError("Only reference_bank='diode' is supported; omit it to disable selection")
+        if reference_bank == "diode":
+            if diode_root is None:
+                raise ValueError("Download DIODE and provide diode_root to enable reference selection")
+            from .reference import DIODEReferenceBank
+            self._bank = DIODEReferenceBank(
+                diode_root, checkpoint=self.config.get("retrieval", {}).get("checkpoint"), device=self.device)
         else:
-            ref = references[reference_uid]
-            if "geometry" in ref:
-                geometry = Geometry.from_dict(ref["geometry"])
+            if diode_root is not None:
+                raise ValueError("Set reference_bank='diode' to use diode_root")
+            self._bank = None
+
+    def generate(self, rgb, *, expansion=None, seeds=None) -> list[Outpainting]:
+        image = _image(rgb)
+        if self._outpainter is None:
+            paths = deepcopy(self.config.get("outpainting", {})) if self._outpainter_spec is None else {}
+            paths.update(self.outpainter_paths)
+            paths["options"] = {**paths.get("options", {}), **self.generation_options}
+            self._outpainter = create_outpainter(paths, device=self.device, implementation=self._outpainter_spec)
+        return self._outpainter.generate(image,
+            expansion=self.expansion if expansion is None else expansion,
+            seeds=self.seeds if seeds is None else seeds)
+
+    def _depth_config(self, known):
+        model = self.depth_model
+        if isinstance(model, str) and model in self.config.get("models", {}):
+            paths = deepcopy(self.config["models"][model])
+            factory = load_implementation(paths["implementation"])
+            name = model
+        elif isinstance(model, (str, type)):
+            factory = load_implementation(model) if isinstance(model, str) else model
+            paths = {}
+            name = getattr(factory, "__name__", "custom_depth")
+        else:
+            factory = None
+            paths = deepcopy(getattr(model, "paths", {}))
+            name = getattr(model, "name", type(model).__name__)
+        # Resource paths for a custom adapter can be supplied without a YAML
+        # experiment. Options are passed through; the pipeline never branches
+        # on model class or upstream model names.
+        paths.update(deepcopy(self.depth_options))
+        paths.update(setting="known" if known else "unknown", batch_size=self.depth_batch_size)
+        return factory, paths, name
+
+    def _get_depth(self, known):
+        factory, paths, name = self._depth_config(known)
+        setting = paths["setting"]
+        if self._depth is None:
+            self._depth = factory(name, paths, self.device) if factory is not None else self.depth_model
+            self._depth_setting = getattr(self._depth, "setting", setting)
+        if self._depth_setting != setting:
+            configure = getattr(self._depth, "configure", None)
+            if getattr(self._depth, "supports_setting_reuse", False) and callable(configure):
+                configure(name, paths)
+            elif self._depth_owned:
+                self.release_depth()
+                self._depth = factory(name, paths, self.device)
             else:
-                geometry = sample_geometry(ref, load_rgb(resolve(root, ref["image"])))
-            camera = reference_camera(ref["camera"], geometry.fixed_w, geometry.fixed_h, 1 if name == "depth_pro" else 2)
-            result = select_unknown(observation["candidate_cameras"], matrix[1:, 1:], camera, bias)
-        arm = "direct" if result.choice == 3 else f"candidate{result.choice}"
-        with np.load(output / "predictions" / name / f"{uid}.npz", allow_pickle=False) as arrays:
-            write_npz(output / "selected" / name / f"{uid}.npz", depth=arrays[arm])
-        write_json(output / "selected" / name / f"{uid}.json",
-                   {"uid": uid, "reference_uid": reference_uid, "reference_bias": bias,
-                    "prediction_cache_key": observation["cache_key"],
-                    "reference_cache_key": reference_record["cache_key"],
-                    "selected_arm": arm, **asdict(result)})
+                raise ValueError("The supplied depth instance cannot switch camera settings")
+            self._depth_setting = setting
+        if not callable(getattr(self._depth, "predict", None)):
+            raise TypeError("A depth adapter must implement predict(requests)")
+        return self._depth
 
-    jobs = [(name, row) for name in names for row in manifest["samples"]]
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        list(tqdm(pool.map(one, jobs), total=len(jobs), desc="Selecting"))
+    def estimate_depths(self, images, *, cameras=None) -> list[Prediction]:
+        images = [_image(image) for image in images]
+        cameras = [None] * len(images) if cameras is None else list(cameras)
+        if len(images) != len(cameras):
+            raise ValueError("Supply one optional camera per RGB image")
+        cameras = [None if camera is None else pixel_intrinsics(camera) for camera in cameras]
+        result = [None] * len(images)
+        for known in (False, True):
+            indices = [i for i, camera in enumerate(cameras) if (camera is not None) == known]
+            if not indices:
+                continue
+            engine = self._get_depth(known)
+            requests = [InferenceInput(str(i), "direct", images[i], camera=cameras[i],
+                                       setting="known" if known else "unknown") for i in indices]
+            predictions = list(engine.predict(requests))
+            if len(predictions) != len(indices):
+                raise ValueError("Depth adapter returned an incomplete batch")
+            for i, prediction in zip(indices, predictions):
+                if (not isinstance(prediction, Prediction) or prediction.depth.dtype != np.float32
+                        or prediction.depth.shape != images[i].shape[:2]):
+                    raise ValueError("Depth adapter must return complete input-grid float32 depth")
+                result[i] = prediction
+        return result
 
+    def estimate_depth(self, rgb, *, camera=None) -> Prediction:
+        return self.estimate_depths([rgb], cameras=[camera])[0]
 
-def evaluate(manifest_path, names, *, output, data_root=None, workers=8, exclude_datasets=()):
-    manifest, root = load_manifest(manifest_path, data_root)
-    output = Path(output)
-    ids = read_json(output / "reference_ids.json")
-    references = {r["uid"]: r for r in manifest.get("references", manifest["samples"])}
+    def infer(self, rgb, *, camera=None, expansion=None, seeds=None,
+              outpaintings=None) -> ContextDepthResult:
+        image = _image(rgb)
+        camera = None if camera is None else pixel_intrinsics(camera)
+        contexts = (self.generate(image, expansion=expansion, seeds=seeds)
+                    if outpaintings is None else list(outpaintings))
+        if not contexts:
+            raise ValueError("At least one outpainting is required")
+        for context in contexts:
+            if not isinstance(context, Outpainting):
+                raise TypeError("Saved outpaintings must be Outpainting objects with a query bbox and seed")
+            x0, y0, x1, y1 = context.bbox
+            if not np.array_equal(context.rgb[y0:y1, x0:x1], image):
+                raise ValueError("Outpainting must preserve the complete original RGB pixels")
+        images = [image, *(context.rgb for context in contexts)]
+        cameras = [camera, *(None if camera is None else context.map_intrinsics(camera) for context in contexts)]
+        predictions = self.estimate_depths(images, cameras=cameras)
+        result = ContextDepthResult(predictions[0], [ContextPrediction(context, prediction)
+                                   for context, prediction in zip(contexts, predictions[1:])])
+        if self._bank is not None:
+            reference = self._bank.retrieve(image, source_path=rgb if isinstance(rgb, (str, Path)) else None)
+            if reference.uid not in self._reference_calibration:
+                prediction = self.estimate_depth(reference.rgb, camera=reference.camera)
+                self._reference_calibration[reference.uid] = reference_bias(prediction.depth, reference.depth)
+            bias = self._reference_calibration[reference.uid]
+            candidates = [crop_prediction(item.prediction, item.outpainting.bbox) for item in result.candidates]
+            pairwise = pairwise_log_ratios([result.direct.depth, *(p.depth for p in candidates)])
+            if camera is not None:
+                selection = select_known(pairwise[1:, 0], bias)
+            else:
+                height, width = image.shape[:2]
+                observations = [camera_features(p.camera, width, height) for p in candidates]
+                ref_h, ref_w = reference.rgb.shape[:2]
+                ref_camera = reference_camera(reference.camera, ref_w, ref_h, len(observations[0]))
+                selection = select_unknown(observations, pairwise[1:, 1:], ref_camera, bias)
+            result.selection = selection
+            result.reference_uid = reference.uid
+            result.selected = result.direct if selection.is_direct else candidates[selection.choice]
+        return result
 
-    def one(job):
-        name, row = job
-        uid = row["uid"]
-        selected = read_json(output / "selected" / name / f"{uid}.json")
-        observation = read_json(output / "predictions" / name / f"{uid}.json")
-        if selected.get("prediction_cache_key") != observation["cache_key"]:
-            raise ValueError(f"Predictions changed since selection: {uid}; rerun select")
-        ref_uid = ids[name][uid]
-        ref_name = CONFIGS[name][3]
-        ref_record = read_json(output / "references" / ref_name / f"{ref_uid}.json")
-        if selected["reference_uid"] != ref_uid or selected.get("reference_cache_key") != ref_record["cache_key"]:
-            raise ValueError(f"Reference changed since selection: {uid}; rerun select")
-        if ref_record.get("input_revision") != input_revision(references[ref_uid], root, ref_name, "reference"):
-            raise ValueError(f"Reference inputs changed since calibration: {ref_uid}; rerun predict")
-        if observation.get("input_revision") != input_revision(row, root, name, "query"):
-            raise ValueError(f"Inputs changed since depth inference: {uid}; rerun predict")
-        choice = selected["selected_arm"]
-        with np.load(resolve(root, row["depth"]), allow_pickle=False) as file:
-            gt = file["depth"]
-            mask = file["mask"] if "mask" in file else None
-        with np.load(output / "predictions" / name / f"{uid}.npz", allow_pickle=False) as arrays:
-            scores = {method: score_depth(arrays[arm], gt, mask)
-                      for method, arm in (("direct", "direct"), ("seed0", "candidate0"), ("selector", choice))}
-        return dict(uid=uid, dataset=row.get("dataset", "custom"), config=name, setting=CONFIGS[name][1], metrics=scores)
+    __call__ = infer
 
-    jobs = [(name, row) for name in names for row in manifest["samples"] if row.get("dataset") not in exclude_datasets]
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        records = list(tqdm(pool.map(one, jobs), total=len(jobs), desc="Evaluating"))
-    rows = aggregate(records)
-    write_json(output / "per_image_metrics.json", records)
-    write_json(output / "metrics.json", {"image_weighting": "equal per image", "excluded_datasets": list(exclude_datasets), "rows": rows})
-    return rows
+    def release_generation(self):
+        if (self._outpainter is not None and self._outpainter_owned
+                and callable(getattr(self._outpainter, "close", None))):
+            self._outpainter.close()
+        self._outpainter = None
+
+    def release_depth(self):
+        if self._depth is not None and self._depth_owned:
+            close = getattr(self._depth, "close", None)
+            if callable(close):
+                close()
+        self._depth, self._depth_setting = None, None
+
+    def close(self):
+        self.release_generation()
+        self.release_depth()
+        if self._bank is not None:
+            self._bank.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()

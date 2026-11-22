@@ -1,20 +1,14 @@
----
-name: contextdepth-install
-description: Install the ContextDepth inference and outpainting runtime from this repository, including pinned upstream checkouts, depth checkpoints, retrieval weights, and the separate generation environment.
----
+# The environments of the paper's runs
 
-# ContextDepth installation
-
-Use this skill when an agent needs to make the ContextDepth checkout runnable.
-Work from the repository root. Read the root `README.md` for the input manifest
-and run commands; this skill is only the environment and asset setup.
+The normal installation in [installation.md](installation.md) uses one environment for outpainting and depth. The paper's runs used two: a depth and retrieval environment built from specific Conda packages, and a separate generation environment. This page records them for readers who want to match those binaries as closely as possible. `requirements-depth.txt`, `requirements-generation.txt`, `validated-depth-runtime.json` and `verify_runtime.py` in `install-contextdepth/` belong to this setup.
 
 ## Boundary and safety
 
 - Do not put credentials, access tokens, local absolute paths, or downloaded
   weights into source control.
 - Do not modify a user's existing environment or replace a checkout at a
-  different revision. Prefer the two new environment names below.
+  different revision. Create the normal unified environment, or the separate
+  historical environments when exact paper reproduction is requested.
 - The scripts stop on revision, patch, or SHA-256 mismatches. Do not bypass a
   mismatch by deleting files or changing the expected hashes.
 - The full FLUX/OneReward generation path is GPU-memory intensive. Do not
@@ -40,8 +34,8 @@ and UniK3D optional-logging patch idempotently.
 
 ## 2. Depth and retrieval environment
 
-The completed iBims depth replay used a restored Linux x86_64 environment on
-an NVIDIA GeForce RTX 4090. Its observed runtime is recorded in
+The paper's depth runs used a Linux x86_64 environment on NVIDIA GeForce
+RTX 4090 GPUs. Its observed runtime is recorded in
 `validated-depth-runtime.json`. In particular, it used Anaconda builds of
 PyTorch, torchvision and Triton, rather than the previously documented pip
 wheel installation. The following core-build recipe is a reconstruction
@@ -126,21 +120,20 @@ camera settings, candidate pixels and per-input DA3 RNG state.
 
 ### JPEG decoding and ROI identity
 
-For the frozen iBims cohort, decode the official JPEG with OpenCV, convert
+For the evaluation cohort, decode the official JPEG with OpenCV, convert
 BGR to RGB, crop using the exact specification, and resize the RGB crop with
 Pillow LANCZOS. OpenCV in the validated environment reports
 `build-libjpeg-turbo (ver 3.0.3-70)`. Pillow reports JPEG API 9.0 without
 libjpeg-turbo; using that Pillow build to decode the JPEG directly failed
-the historical query hash for all 100 audited images. OpenCV decoding passed
-for all 100. Pillow remains the resize implementation.
+the stored query hash for all 100 audited iBims-1 images. OpenCV decoding
+passed for all 100. Pillow remains the resize implementation.
 
-Use the existing `run.py prepare` entry point and preserve both RGB SHA-256
-checks. A library version pin does not replace those pixel checks. The frozen
-specification and reference/candidate/RNG assets remain external inputs; the
-blind source package does not contain them. Rebuilding query pixels alone
-does not regenerate the same diffusion candidates.
+`python -m evaluation prepare` implements this and checks both RGB SHA-256
+values of every query. A library version pin does not replace those pixel
+checks. Rebuilding the query pixels does not regenerate the paper's diffusion
+candidates, which are not distributed.
 
-Prepare the seven depth checkpoints and the SigLIP2 vision tower:
+Prepare the depth checkpoints and the SigLIP2 vision tower:
 
 ```bash
 python install-contextdepth/prepare_weights.py depth
@@ -194,33 +187,25 @@ switch to an offloaded or quantized variant when comparing numbers.
 
 ## 4. Installation check
 
-From each environment, run the relevant setup checks and then follow the root
-README's `run.py` examples. Do not upgrade PyTorch or replace the observed
+From each environment, run the relevant setup checks. Do not upgrade PyTorch or replace the observed
 Conda build to resolve a pip metadata warning. For the depth environment:
 
 ```bash
 python install-contextdepth/setup_upstreams.py --check
 python install-contextdepth/prepare_weights.py depth --check-only
 python install-contextdepth/verify_runtime.py --ptxas "$TRITON_PTXAS_PATH"
-python run.py --help
+python -m evaluation --help
 ```
 
-After the required sources and weights are present, run one small manifest
-through `infer --prepare-only`, then either `generate` the three candidates or
-`import-assets` from an archived candidate bundle, and finally run
-`run --skip-generation` on a single GPU before launching a full cohort. This
-catches path, camera, candidate-shape, and CUDA-extension errors without
-changing the numerical protocol.
+After the required sources and weights are present, run the quick check of
+[reproduction.md](reproduction.md#quick-check) on a single GPU before launching
+the full cohort. This catches path, camera, candidate-shape, and CUDA-extension
+errors without changing the numerical protocol.
 
-The completed full iBims replay reused archived outpaintings with
-`--skip-generation`: 100 queries x 12 configurations, with all 4,800 direct
-and candidate depth arrays equal to the historical arrays. An independent
-input audit reproduced all 100 fixed/query RGB pairs from official JPEGs.
-All paper-display metrics agree, while five of 24 raw aggregate floats differ
-by one ULP. Other datasets, newly generated diffusion candidates and a fresh
-environment reconstructed from the recipe above have not passed this same
-full-cohort gate. Keep those claims separate from the verified restored
-environment result.
+The paper's numbers were produced with archived outpaintings and, for DA3,
+with a recorded random-number state restored before each input. Neither is
+distributed, so a new run in these environments regenerates the candidates
+and is not expected to be bit-identical to the paper's runs.
 
 If a checkpoint, upstream revision, CUDA compiler, or required external asset
 is unavailable, stop with the concrete missing item. Do not invent a fallback

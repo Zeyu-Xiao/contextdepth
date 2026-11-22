@@ -16,6 +16,7 @@ import numpy as np
 from PIL import Image
 
 from .geometry import _rgb, _validate_geometry, canvas_geometry, restore_query_pixels
+from .generation import OutpaintingBaseline
 from .types import Geometry
 
 
@@ -46,10 +47,18 @@ class OneRewardOutpainter:
     twice that size, so they need more activation memory.
     """
 
-    def __init__(self, paths: Mapping[str, str | Path], device: str = "cuda:0"):
+    def __init__(self, paths: Mapping[str, str | Path], device: str = "cuda:0", *, offload=None):
         import torch
         from diffusers import FluxTransformer2DModel
 
+        if offload is None:
+            # The evaluation constructs this class from its config section alone, so the
+            # memory option can also be given there: outpainting: {options: {offload: model}}.
+            offload = dict(paths.get("options") or {}).get("offload")
+        if offload not in (None, "model"):
+            raise ValueError("offload must be omitted or 'model'")
+        if offload == "model" and torch.device(device).type != "cuda":
+            raise ValueError("Model CPU offload requires a CUDA device")
         self.paths = {name: Path(paths[name]).expanduser().resolve() for name in ("source", "base_model", "weights")}
         pipeline_path = self.paths["source"] / "src/pipeline_flux_fill_with_cfg.py"
         if not pipeline_path.is_file():
@@ -71,7 +80,11 @@ class OneRewardOutpainter:
             torch_dtype=torch.bfloat16, local_files_only=True)
         self.pipe.vae.enable_tiling()
         self.pipe.vae.enable_slicing()
-        self.pipe.to(device)
+        if offload == "model":
+            target = torch.device(device)
+            self.pipe.enable_model_cpu_offload(gpu_id=target.index, device=target.type)
+        else:
+            self.pipe.to(device)
         self.pipe.set_progress_bar_config(disable=True)
 
     def generate(self, query_rgbs: list[np.ndarray], uids: list[str], candidate_indices: list[int],
@@ -128,3 +141,60 @@ class OneRewardOutpainter:
             raise RuntimeError(f"OneReward returned {len(result)} images for {count} items")
         return [restore_query_pixels(np.asarray(image.convert("RGB")), query, geometry)
                 for image, query, geometry in zip(result, query_rgbs, geometries)]
+
+    def close(self):
+        """Release this instance's weights before loading another GPU model."""
+        import gc
+        self.pipe = None
+        gc.collect()
+        if str(self.device).startswith("cuda") and self._torch.cuda.is_available():
+            with self._torch.cuda.device(self.device):
+                self._torch.cuda.empty_cache()
+
+
+class OneRewardBaseline(OutpaintingBaseline):
+    """Public OneReward adapter for exact requested expansions, default 10%.
+
+    Unlike the retained paper API above, this constructs the requested canvas
+    directly. FLUX requires multiples of 16: only its temporary canvas is padded
+    on the right/bottom, and those extra pixels are removed from the result.
+    The supplied query is never resized. Default candidate inference is serial
+    to avoid silently tripling full FLUX activation memory.
+    """
+
+    def __init__(self, paths, device="cuda:0"):
+        super().__init__(paths, device)
+        offload = self.paths.get("options", {}).get("offload")
+        self._engine = OneRewardOutpainter(paths, device, offload=offload)
+        self.metadata = {"implementation": "OneReward", "pipeline_sha256": self._engine.pipeline_sha256,
+                         "alignment": "minimal right/bottom padding to 16 pixels", "query_resized": False,
+                         "offload": offload}
+
+    def generate_images(self, rgb, *, bbox, canvas_size, seeds):
+        width, height = canvas_size
+        native_width, native_height = ((width + 15) // 16) * 16, ((height + 15) // 16) * 16
+        canvas = Image.new("RGB", (native_width, native_height), "white")
+        canvas.paste(Image.fromarray(rgb), bbox[:2])
+        mask = Image.new("L", (native_width, native_height), 255)
+        mask.paste(0, bbox)
+        images = []
+        for seed in seeds:
+            generator = self._engine._torch.Generator("cpu").manual_seed(seed)
+            result = self._engine.pipe(
+                prompt=PROMPT, negative_prompt=NEGATIVE_PROMPT, image=canvas, mask_image=mask,
+                height=native_height, width=native_width, guidance_scale=1.0, true_cfg=4.0,
+                num_inference_steps=50, generator=generator,
+            ).images
+            if len(result) != 1:
+                raise RuntimeError(f"OneReward returned {len(result)} images for one seed")
+            image = np.asarray(result[0].convert("RGB"))
+            if image.shape != (native_height, native_width, 3):
+                raise ValueError("OneReward output does not match its requested aligned canvas")
+            images.append(np.array(image[:height, :width], copy=True, order="C"))
+        return images
+
+    def close(self):
+        super().close()
+        if self._engine is not None:
+            self._engine.close()
+            self._engine = None

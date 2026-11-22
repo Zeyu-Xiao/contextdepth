@@ -1,0 +1,131 @@
+{
+  "cohort": "quick",
+  "purpose": "End-to-end installation check: six iBims-1 queries whose reference images are also iBims-1 images.",
+  "datasets": [
+    "iBims-1"
+  ],
+  "queries": [
+    "ibims1_003_corridor_03",
+    "ibims1_018_factory_08",
+    "ibims1_034_lab_08",
+    "ibims1_050_livingroom_03",
+    "ibims1_065_meetingroom_03",
+    "ibims1_081_restaurant_03"
+  ],
+  "reference_images": 6,
+  "query_only_delta1": {
+    "da3metric_gt_focal": {
+      "ibims1_003_corridor_03": 0.7373710658555938,
+      "ibims1_018_factory_08": 0.9924310940442125,
+      "ibims1_034_lab_08": 0.9719516254299345,
+      "ibims1_050_livingroom_03": 0.9905022294528802,
+      "ibims1_065_meetingroom_03": 0.9691396065418345,
+      "ibims1_081_restaurant_03": 0.9999735227924629
+    },
+    "da3nested": {
+      "ibims1_003_corridor_03": 0.06894854388903582,
+      "ibims1_018_factory_08": 0.5252642815840586,
+      "ibims1_034_lab_08": 0.9740227079403824,
+      "ibims1_050_livingroom_03": 0.9955862858520126,
+      "ibims1_065_meetingroom_03": 0.9987200758473572,
+      "ibims1_081_restaurant_03": 0.7417148404748246
+    },
+    "depth_pro": {
+      "ibims1_003_corridor_03": 0.7466352228981163,
+      "ibims1_018_factory_08": 0.8531513632926594,
+      "ibims1_034_lab_08": 0.9772772661710862,
+      "ibims1_050_livingroom_03": 0.9890184381778742,
+      "ibims1_065_meetingroom_03": 0.9996397250533302,
+      "ibims1_081_restaurant_03": 1.0
+    },
+    "depth_pro2": {
+      "ibims1_003_corridor_03": 0.7124511446119486,
+      "ibims1_018_factory_08": 0.8350704997998428,
+      "ibims1_034_lab_08": 0.11203077036872665,
+      "ibims1_050_livingroom_03": 0.9950138587611472,
+      "ibims1_065_meetingroom_03": 0.9997724579284191,
+      "ibims1_081_restaurant_03": 0.9999735227924629
+    },
+    "depth_pro2_gt_focal": {
+      "ibims1_003_corridor_03": 0.7390754944312204,
+      "ibims1_018_factory_08": 0.9930315655255237,
+      "ibims1_034_lab_08": 0.9757387477347536,
+      "ibims1_050_livingroom_03": 0.990924017835623,
+      "ibims1_065_meetingroom_03": 0.9998862289642095,
+      "ibims1_081_restaurant_03": 0.9999735227924629
+    },
+    "depth_pro_gt_focal": {
+      "ibims1_003_corridor_03": 0.03380205119163067,
+      "ibims1_018_factory_08": 0.8112517977078298,
+      "ibims1_034_lab_08": 0.9773882170198602,
+      "ibims1_050_livingroom_03": 0.9924906604000964,
+      "ibims1_065_meetingroom_03": 0.9998103816070159,
+      "ibims1_081_restaurant_03": 1.0
+    },
+    "moge2": {
+      "ibims1_003_corridor_03": 0.737084545534691,
+      "ibims1_018_factory_08": 0.20418995655848296,
+      "ibims1_034_lab_08": 0.9620178261030363,
+      "ibims1_050_livingroom_03": 0.9938087490961678,
+      "ibims1_065_meetingroom_03": 0.9904337520739511,
+      "ibims1_081_restaurant_03": 1.0
+    },
+    "moge2_gt_fov": {
+      "ibims1_003_corridor_03": 0.9585941402921038,
+      "ibims1_018_factory_08": 0.9963526917431464,
+      "ibims1_034_lab_08": 0.9753171345094124,
+      "ibims1_050_livingroom_03": 0.9950063268257412,
+      "ibims1_065_meetingroom_03": 0.9998862289642095,
+      "ibims1_081_restaurant_03": 1.0
+    },
+    "moge3_known": {
+      "ibims1_003_corridor_03": 0.974808251785242,
+      "ibims1_018_factory_08": 0.9972052129820451,
+      "ibims1_034_lab_08": 0.8900181219719664,
+      "ibims1_050_livingroom_03": 0.9972433116413594,
+      "ibims1_065_meetingroom_03": 0.9996492059729793,
+      "ibims1_081_restaurant_03": 0.9996646220378624
+    },
+    "moge3_unknown": {
+      "ibims1_003_corridor_03": 0.4115607276146816,
+      "ibims1_018_factory_08": 0.5132177858170118,
+      "ibims1_034_lab_08": 0.8752098820222641,
+      "ibims1_050_livingroom_03": 0.9971755242227043,
+      "ibims1_065_meetingroom_03": 0.9992984119459588,
+      "ibims1_081_restaurant_03": 0.9974934910198138
+    },
+    "unidepth_gt_k": {
+      "ibims1_003_corridor_03": 0.738113080019983,
+      "ibims1_018_factory_08": 0.99435853336694,
+      "ibims1_034_lab_08": 0.9692000443803395,
+      "ibims1_050_livingroom_03": 0.9936204507110147,
+      "ibims1_065_meetingroom_03": 0.9760606778857549,
+      "ibims1_081_restaurant_03": 0.9999735227924629
+    },
+    "unidepth_v2_vitl14": {
+      "ibims1_003_corridor_03": 0.7305386582032972,
+      "ibims1_018_factory_08": 0.9939582190460658,
+      "ibims1_034_lab_08": 0.9555678834276415,
+      "ibims1_050_livingroom_03": 0.9947125813449024,
+      "ibims1_065_meetingroom_03": 0.9671486134155013,
+      "ibims1_081_restaurant_03": 0.9999735227924629
+    },
+    "unik3d_known": {
+      "ibims1_003_corridor_03": 0.7353874636339592,
+      "ibims1_018_factory_08": 0.9945290376147197,
+      "ibims1_034_lab_08": 0.9687118606457339,
+      "ibims1_050_livingroom_03": 0.9951419016630514,
+      "ibims1_065_meetingroom_03": 0.9651481393695188,
+      "ibims1_081_restaurant_03": 0.9999735227924629
+    },
+    "unik3d_unknown": {
+      "ibims1_003_corridor_03": 0.7323753269270328,
+      "ibims1_018_factory_08": 0.9936839296039853,
+      "ibims1_034_lab_08": 0.958201116905211,
+      "ibims1_050_livingroom_03": 0.9954808387563269,
+      "ibims1_065_meetingroom_03": 0.9363830291538279,
+      "ibims1_081_restaurant_03": 1.0
+    }
+  },
+  "query_only_delta1_source": "Per-image Query-only delta1 of the authors' runs. Query-only does not depend on generated images."
+}
